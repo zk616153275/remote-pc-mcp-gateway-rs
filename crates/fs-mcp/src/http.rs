@@ -1,11 +1,11 @@
 use crate::tools::{call_tool, tool_definitions};
 use anyhow::Result;
-use axum::extract::State;
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use rpc_mcp_core::constant_time_eq;
+use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use rpc_mcp_core::path_guard::AllowedRoots;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
@@ -30,10 +30,10 @@ fn check_auth(headers: &HeaderMap, expected_token: &str) -> bool {
     let Some(raw) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
         return false;
     };
-    let Some(token) = raw.strip_prefix("Bearer ") else {
+    let Some(token) = extract_bearer_token(raw) else {
         return false;
     };
-    constant_time_eq(token.trim(), expected_token)
+    constant_time_eq(token, expected_token)
 }
 
 async fn healthz(State(state): State<Arc<FsState>>) -> impl IntoResponse {
@@ -151,6 +151,7 @@ pub fn build_router(cfg: FsServerConfig) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/mcp", post(mcp_post).delete(mcp_delete))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state(state)
 }
 

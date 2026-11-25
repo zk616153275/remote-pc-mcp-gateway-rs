@@ -73,17 +73,31 @@ impl TaskJournal {
     }
 
     pub fn record_running(&self, id: String, owner: String, name: String) {
+        let now = now_sec();
         let rec = TaskRecord {
             id: id.clone(),
             owner,
             name,
             status: "running".into(),
-            created: now_sec(),
+            created: now,
             finished: None,
             result: None,
         };
         self.persist(&rec);
-        self.tasks.lock().unwrap().insert(id, rec);
+        let mut map = self.tasks.lock().unwrap();
+        // Periodically prune expired entries to bound memory and disk usage
+        let expired: Vec<String> = map
+            .iter()
+            .filter(|(_, r)| now.saturating_sub(r.created) > TTL_SEC)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in expired {
+            map.remove(&k);
+            if let Some(ref d) = self.dir {
+                let _ = fs::remove_file(d.join(format!("{k}.json")));
+            }
+        }
+        map.insert(id, rec);
     }
 
     pub fn record_finished(&self, id: &str, result: Value) {

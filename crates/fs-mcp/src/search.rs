@@ -1,10 +1,10 @@
 use globset::{Glob, GlobSetBuilder};
 use grep_regex::RegexMatcherBuilder;
-use grep_searcher::sinks::UTF8;
-use grep_searcher::{BinaryDetection, SearcherBuilder};
+use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::WalkBuilder;
 use serde::Serialize;
 use std::collections::HashSet;
+use std::io;
 use std::path::Path;
 
 pub const DEFAULT_EXCLUDES: &[&str] = &[
@@ -115,19 +115,53 @@ pub fn grep_files_sync(
             }
         }
 
+        struct ContextSink<'a> {
+            file_lines: &'a mut Vec<String>,
+            total_matches: &'a mut usize,
+            max_results: usize,
+            truncated: &'a mut bool,
+        }
+
+        impl<'a> Sink for ContextSink<'a> {
+            type Error = io::Error;
+
+            fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+                *self.total_matches += 1;
+                let lnum = mat.line_number().unwrap_or(0);
+                let line = String::from_utf8_lossy(mat.bytes());
+                self.file_lines
+                    .push(format!("{}:{}", lnum, line.trim_end_matches(['\r', '\n'])));
+                if *self.total_matches >= self.max_results {
+                    *self.truncated = true;
+                    return Ok(false);
+                }
+                Ok(true)
+            }
+
+            fn context(&mut self, _searcher: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
+                let lnum = ctx.line_number().unwrap_or(0);
+                let line = String::from_utf8_lossy(ctx.bytes());
+                self.file_lines
+                    .push(format!("{}-{}", lnum, line.trim_end_matches(['\r', '\n'])));
+                Ok(true)
+            }
+
+            fn context_break(&mut self, _searcher: &Searcher) -> Result<bool, Self::Error> {
+                self.file_lines.push("--".to_string());
+                Ok(true)
+            }
+        }
+
         let mut file_lines: Vec<String> = Vec::new();
         let _ = searcher.search_path(
             &matcher,
             path,
-            UTF8(|lnum, line| {
-                total_matches += 1;
-                file_lines.push(format!("{}:{}", lnum, line.trim_end_matches(['\r', '\n'])));
-                if total_matches >= max_results {
-                    truncated = true;
-                    return Ok(false);
-                }
-                Ok(true)
-            }),
+            ContextSink {
+                file_lines: &mut file_lines,
+                total_matches: &mut total_matches,
+                max_results,
+                truncated: &mut truncated,
+            },
         );
 
         if !file_lines.is_empty() {

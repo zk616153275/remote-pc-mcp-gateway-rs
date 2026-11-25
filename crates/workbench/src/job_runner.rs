@@ -355,13 +355,55 @@ mod win_impl {
         thread::spawn(move || {
             let mut file = unsafe { fs::File::from_raw_handle(raw_usize as RawHandle) };
             let mut buf = [0u8; 4096];
+            let mut pending: Vec<u8> = Vec::new();
             loop {
                 match file.read(&mut buf) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        if !pending.is_empty() {
+                            let text = String::from_utf8_lossy(&pending);
+                            if let Ok(mut guard) = log.lock() {
+                                guard.append(stream, &text);
+                            }
+                            pending.clear();
+                        }
+                        break;
+                    }
                     Ok(n) => {
-                        let text = String::from_utf8_lossy(&buf[..n]);
-                        if let Ok(mut guard) = log.lock() {
-                            guard.append(stream, &text);
+                        pending.extend_from_slice(&buf[..n]);
+                        let mut valid_up_to = 0usize;
+                        let mut out = String::new();
+                        loop {
+                            match std::str::from_utf8(&pending[valid_up_to..]) {
+                                Ok(s) => {
+                                    out.push_str(s);
+                                    valid_up_to = pending.len();
+                                    break;
+                                }
+                                Err(e) => {
+                                    let valid_len = e.valid_up_to();
+                                    if valid_len > 0 {
+                                        out.push_str(unsafe {
+                                            std::str::from_utf8_unchecked(
+                                                &pending[valid_up_to..valid_up_to + valid_len],
+                                            )
+                                        });
+                                        valid_up_to += valid_len;
+                                    }
+                                    if let Some(err_len) = e.error_len() {
+                                        out.push('\u{FFFD}');
+                                        valid_up_to += err_len;
+                                    } else {
+                                        // Incomplete multi-byte UTF-8 sequence at chunk end: keep for next read
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        pending.drain(..valid_up_to);
+                        if !out.is_empty() {
+                            if let Ok(mut guard) = log.lock() {
+                                guard.append(stream, &out);
+                            }
                         }
                     }
                     Err(_) => break,
@@ -570,8 +612,8 @@ mod win_impl {
             bytes: 0,
             base: 0,
         }));
-        let out_thread = spawn_drain(out_read, "stdout", Arc::clone(&log_state));
-        let err_thread = spawn_drain(err_read, "stderr", Arc::clone(&log_state));
+        let mut out_thread = Some(spawn_drain(out_read, "stdout", Arc::clone(&log_state)));
+        let mut err_thread = Some(spawn_drain(err_read, "stderr", Arc::clone(&log_state)));
 
         unsafe {
             ResumeThread(pi.hThread);
@@ -603,6 +645,16 @@ mod win_impl {
 
             let pids = query_job_pids(job);
             let finished = pids.is_empty();
+            if finished {
+                // Ensure all piped stdout/stderr chunks are flushed to output.jsonl
+                // BEFORE status.json transitions to a terminal state.
+                if let Some(h) = out_thread.take() {
+                    let _ = h.join();
+                }
+                if let Some(h) = err_thread.take() {
+                    let _ = h.join();
+                }
+            }
             let root_done = unsafe { WaitForSingleObject(pi.hProcess, 0) } == WAIT_OBJECT_0;
             let mut raw_code = 0u32;
             unsafe {
@@ -647,8 +699,12 @@ mod win_impl {
             thread::sleep(Duration::from_millis(250));
         }
 
-        let _ = out_thread.join();
-        let _ = err_thread.join();
+        if let Some(h) = out_thread.take() {
+            let _ = h.join();
+        }
+        if let Some(h) = err_thread.take() {
+            let _ = h.join();
+        }
 
         unsafe {
             CloseHandle(pi.hThread);

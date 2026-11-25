@@ -54,9 +54,7 @@ if ($cfg.connectionMode -eq 'vps-ssh' -or $cfg.connectionMode -eq 'vps') {
     $knownHosts = Join-Path (Split-Path -Parent $configPath) 'vps-known-hosts'
 
     $sshArgs = @(
-        '-i', $pem,
         '-p', [string]$sshPort,
-        '-o', 'IdentitiesOnly=yes',
         '-o', 'BatchMode=yes',
         '-o', 'StrictHostKeyChecking=accept-new',
         '-o', "UserKnownHostsFile=$knownHosts",
@@ -66,6 +64,9 @@ if ($cfg.connectionMode -eq 'vps-ssh' -or $cfg.connectionMode -eq 'vps') {
         '-R', ("127.0.0.1:{0}:127.0.0.1:{1}" -f [int]$vps.remoteFsPort, $fsPort),
         '-R', ("127.0.0.1:{0}:127.0.0.1:{1}" -f [int]$vps.remoteWorkbenchPort, $wbPort)
     )
+    if (-not [string]::IsNullOrWhiteSpace($pem)) {
+        $sshArgs = @('-i', $pem, '-o', 'IdentitiesOnly=yes') + $sshArgs
+    }
     if ($cfg.gateway.enableChrome) {
         $chromePort = if ($cfg.localPorts.chromeMcp) { [int]$cfg.localPorts.chromeMcp } else { 18619 }
         $sshArgs += @('-R', ("127.0.0.1:{0}:127.0.0.1:{1}" -f [int]$vps.remoteChromeMcpPort, $chromePort))

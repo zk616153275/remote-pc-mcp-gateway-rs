@@ -6,9 +6,14 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 const TTL_SECONDS: i64 = 600;
+
+fn state_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 struct Rule {
     regex: Regex,
@@ -21,7 +26,7 @@ fn danger_rules() -> &'static [Rule] {
         [
             (r"(?i)\brm\s+(?:-[a-z]*\s+)*-{1,2}[a-z]*r[a-z]*\b", "rm -r/-rf"),
             (r"(?i)\brm\s+-[a-z]*f[a-z]*r[a-z]*\b", "rm -fr"),
-            (r"(?i)Remove-Item\b[^\r\n|;]*-(Recurse|Force)\b", "Remove-Item -Recurse/-Force"),
+            (r"(?i)\b(?:Remove-Item|ri|del|erase)\b[^\r\n|;]*-(?:Recurse|Force|r|fo)\b", "Remove-Item -Recurse/-Force"),
             (r"(?i)\brmdir\s+/s\b", "rmdir /s"),
             (r"(?i)\brd\s+/s\b", "rd /s"),
             (r"(?i)\bdel\s+/[sq]\b", "del /s|/q"),
@@ -77,10 +82,18 @@ impl DeleteGuard {
         Self { state_dir, enabled }
     }
 
-    pub fn fingerprint(command: &str) -> String {
-        let normalized = command.trim().replace("\r\n", "\n");
+    pub fn fingerprint(command: &str, cwd: &Path) -> String {
+        let normalized_cmd = command.trim().replace("\r\n", "\n");
+        let normalized_cwd = cwd
+            .to_string_lossy()
+            .trim()
+            .replace('/', r"\")
+            .trim_end_matches('\\')
+            .to_lowercase();
         let mut hasher = Sha256::new();
-        hasher.update(normalized.as_bytes());
+        hasher.update(normalized_cwd.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(normalized_cmd.as_bytes());
         hex::encode(hasher.finalize())
     }
 
@@ -141,8 +154,9 @@ impl DeleteGuard {
             }
         }
 
-        let fp = Self::fingerprint(command);
+        let fp = Self::fingerprint(command, cwd);
         let now = Utc::now().timestamp();
+        let _guard = state_lock().lock().unwrap_or_else(|e| e.into_inner());
         let mut state = self.load_state(now);
 
         if state.remove(&fp).is_some() {
@@ -197,12 +211,21 @@ mod tests {
         let first = guard.check("rm -rf ./dist", cwd);
         assert!(matches!(first, GuardDecision::BlockFirstAttempt { .. }));
 
+        // Different cwd must NOT reuse confirmation from the first directory
+        let other_cwd = Path::new(r"D:\other-workspace");
+        let diff_dir = guard.check("rm -rf ./dist", other_cwd);
+        assert!(matches!(diff_dir, GuardDecision::BlockFirstAttempt { .. }));
+
         let second = guard.check("rm -rf ./dist", cwd);
         assert!(matches!(second, GuardDecision::AllowConfirmedOnce { .. }));
 
         // Consumed after one execution; a 3rd attempt blocks again
         let third = guard.check("rm -rf ./dist", cwd);
         assert!(matches!(third, GuardDecision::BlockFirstAttempt { .. }));
+
+        // PowerShell alias ri -Recurse is also blocked
+        let ps_alias = guard.check("ri -Recurse -Force ./tmp", cwd);
+        assert!(matches!(ps_alias, GuardDecision::BlockFirstAttempt { .. }));
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -14,6 +14,12 @@ pub const BLOCKED_GIT_TOKENS: &[&str] = &[
     "branch",
     "tag",
     "worktree",
+    "output",
+    "ext-diff",
+    "textconv",
+    "exec",
+    "upload-pack",
+    "receive-pack",
 ];
 
 pub const MAX_GIT_ARGS: usize = 16;
@@ -64,6 +70,14 @@ mod tests {
         assert_eq!(
             validate_readonly_git_args(&["--branch=main".into()]),
             Err(GitPolicyError::BlockedToken("branch".into()))
+        );
+        assert_eq!(
+            validate_readonly_git_args(&["--output=C:\\evil.txt".into()]),
+            Err(GitPolicyError::BlockedToken("output".into()))
+        );
+        assert_eq!(
+            validate_readonly_git_args(&["--ext-diff".into()]),
+            Err(GitPolicyError::BlockedToken("ext-diff".into()))
         );
         assert!(matches!(
             validate_readonly_git_args(&["HEAD; whoami".into()]),

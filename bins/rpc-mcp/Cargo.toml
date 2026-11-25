@@ -21,6 +21,7 @@ rpc-mcp-workbench = { path = "../../crates/workbench" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 base64.workspace = true

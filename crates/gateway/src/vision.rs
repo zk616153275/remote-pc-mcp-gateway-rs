@@ -1,9 +1,11 @@
 use base64::engine::general_purpose::STANDARD as B64_STD;
 use base64::Engine;
 use reqwest::Client;
+use rpc_mcp_core::path_guard::{validate_workspace_path_lexical, AllowedRoots};
 use serde_json::{json, Value};
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 
 pub const DEFAULT_INSPECT_PROMPT: &str = "Visually inspect this image and provide an objective, concrete report:\n\
 1) Four-edge check: verify whether any text, UI controls, or borders are clipped or flush against canvas edges;\n\
@@ -81,6 +83,7 @@ fn mime_for_ext(path: &Path) -> Option<&'static str> {
 pub async fn run_inspect_image(
     http: &Client,
     cfg: &VisionConfig,
+    allowed_roots: &[String],
     args: &Value,
 ) -> Value {
     if !cfg.is_enabled() {
@@ -92,14 +95,42 @@ pub async fn run_inspect_image(
     let Some(raw_path) = args.get("path").and_then(Value::as_str).map(str::trim) else {
         return json!({ "isError": true, "content": [{ "type": "text", "text": "image path is required" }] });
     };
-    let path = Path::new(raw_path);
-    let Some(mime) = mime_for_ext(path) else {
+    if allowed_roots.is_empty() {
+        return json!({ "isError": true, "content": [{ "type": "text", "text": "no allowed workspace directories configured" }] });
+    }
+    // Enforce allowed_roots both lexically and (when running locally) via canonical symlink-safe validation
+    if let Err(e) = validate_workspace_path_lexical(raw_path, allowed_roots) {
+        return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] });
+    }
+    let path: PathBuf = match AllowedRoots::new(allowed_roots) {
+        Ok(guard) => match guard.validate(raw_path) {
+            Ok(p) => p,
+            Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+        },
+        Err(_) => PathBuf::from(raw_path),
+    };
+    let Some(mime) = mime_for_ext(&path) else {
         return json!({
             "isError": true,
             "content": [{ "type": "text", "text": "inspect_image only supports .png, .jpg, .jpeg, .webp, .gif, or .bmp files" }]
         });
     };
-    let bytes = match fs::read(path) {
+    match tokio::fs::metadata(&path).await {
+        Ok(meta) if meta.len() > MAX_IMAGE_BYTES => {
+            return json!({
+                "isError": true,
+                "content": [{ "type": "text", "text": format!("image file exceeds {} MiB limit", MAX_IMAGE_BYTES / (1024 * 1024)) }]
+            });
+        }
+        Ok(_) => {}
+        Err(e) => {
+            return json!({
+                "isError": true,
+                "content": [{ "type": "text", "text": format!("failed to read image: {e}") }]
+            });
+        }
+    }
+    let bytes = match tokio::fs::read(&path).await {
         Ok(b) if !b.is_empty() => b,
         Ok(_) => return json!({ "isError": true, "content": [{ "type": "text", "text": "image file is empty" }] }),
         Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": format!("failed to read image: {e}") }] }),

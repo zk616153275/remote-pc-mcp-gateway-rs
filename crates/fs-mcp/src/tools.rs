@@ -5,10 +5,13 @@ use crate::search::{
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use rpc_mcp_core::path_guard::AllowedRoots;
+use rpc_mcp_core::write_atomic_string;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use similar::TextDiff;
-use std::fs;
+use std::collections::VecDeque;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 pub const RESPONSE_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
@@ -286,20 +289,53 @@ fn read_text_with_bounds(
     tail: Option<usize>,
 ) -> Result<String, ToolResult> {
     let meta = fs::metadata(path).map_err(|e| ToolResult::error(e.to_string()))?;
-    if head.is_none() && tail.is_none() && meta.len() > RESPONSE_LIMIT_BYTES {
-        return Err(ToolResult::oversized());
+    if head.is_none() && tail.is_none() {
+        if meta.len() > RESPONSE_LIMIT_BYTES {
+            return Err(ToolResult::oversized());
+        }
+        return fs::read_to_string(path).map_err(|e| ToolResult::error(e.to_string()));
     }
-    let content = fs::read_to_string(path).map_err(|e| ToolResult::error(e.to_string()))?;
+
+    let file = File::open(path).map_err(|e| ToolResult::error(e.to_string()))?;
+    let reader = BufReader::new(file);
+
     if let Some(n) = head {
-        let out: Vec<&str> = content.lines().take(n).collect();
+        let mut out = Vec::new();
+        let mut bytes = 0usize;
+        for line_res in reader.lines().take(n) {
+            let line = line_res.map_err(|e| ToolResult::error(e.to_string()))?;
+            bytes = bytes.saturating_add(line.len() + 1);
+            if bytes as u64 > RESPONSE_LIMIT_BYTES {
+                return Err(ToolResult::oversized());
+            }
+            out.push(line);
+        }
         return Ok(out.join("\n"));
     }
+
     if let Some(n) = tail {
-        let lines: Vec<&str> = content.lines().collect();
-        let start = lines.len().saturating_sub(n);
-        return Ok(lines[start..].join("\n"));
+        if n == 0 {
+            return Ok(String::new());
+        }
+        let mut ring: VecDeque<String> = VecDeque::with_capacity(n.min(4096));
+        let mut ring_bytes = 0usize;
+        for line_res in reader.lines() {
+            let line = line_res.map_err(|e| ToolResult::error(e.to_string()))?;
+            if ring.len() == n {
+                if let Some(evicted) = ring.pop_front() {
+                    ring_bytes = ring_bytes.saturating_sub(evicted.len() + 1);
+                }
+            }
+            ring_bytes = ring_bytes.saturating_add(line.len() + 1);
+            ring.push_back(line);
+        }
+        if ring_bytes as u64 > RESPONSE_LIMIT_BYTES {
+            return Err(ToolResult::oversized());
+        }
+        return Ok(ring.into_iter().collect::<Vec<_>>().join("\n"));
     }
-    Ok(content)
+
+    Ok(String::new())
 }
 
 fn mime_for_path(path: &Path) -> &'static str {
@@ -604,7 +640,7 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 Ok(m) => m,
                 Err(e) => return ToolResult::error(e.to_string()),
             };
-            if (meta.len() * 4) / 3 > RESPONSE_LIMIT_BYTES {
+            if meta.len().saturating_mul(4) / 3 > RESPONSE_LIMIT_BYTES {
                 return ToolResult::oversized();
             }
             let bytes = match fs::read(&path) {
@@ -643,24 +679,36 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 .and_then(Value::as_u64)
                 .unwrap_or(400)
                 .clamp(1, 4000) as usize;
-            let content = match fs::read_to_string(&path) {
-                Ok(c) => c,
+            let file = match File::open(&path) {
+                Ok(f) => f,
                 Err(e) => return ToolResult::error(e.to_string()),
             };
-            let lines: Vec<&str> = content.lines().collect();
-            let start_idx = offset.saturating_sub(1).min(lines.len());
-            let end_idx = (start_idx + limit).min(lines.len());
-            let numbered: Vec<String> = lines[start_idx..end_idx]
-                .iter()
-                .enumerate()
-                .map(|(i, line)| format!("{}: {line}", start_idx + i + 1))
-                .collect();
+            let reader = BufReader::new(file);
+            let mut numbered = Vec::new();
+            let mut total_lines = 0usize;
+            let end_line = offset.saturating_add(limit).saturating_sub(1);
+            for line_res in reader.lines() {
+                let line = match line_res {
+                    Ok(l) => l,
+                    Err(e) => return ToolResult::error(e.to_string()),
+                };
+                total_lines += 1;
+                if total_lines >= offset && total_lines <= end_line {
+                    numbered.push(format!("{total_lines}: {line}"));
+                }
+            }
+            let first_shown = if numbered.is_empty() { 0 } else { offset };
+            let last_shown = if numbered.is_empty() {
+                0
+            } else {
+                offset + numbered.len() - 1
+            };
             let header = format!(
                 "File: {} (lines {}-{} of {})\n",
                 path.display(),
-                if numbered.is_empty() { 0 } else { start_idx + 1 },
-                end_idx,
-                lines.len()
+                first_shown,
+                last_shown,
+                total_lines
             );
             ToolResult::text(truncate_output(format!("{header}{}", numbered.join("\n")), None))
         }
@@ -716,7 +764,7 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                     ));
                 }
             }
-            match fs::write(&path, content.as_bytes()) {
+            match write_atomic_string(&path, content) {
                 Ok(()) => ToolResult::text(format!("Successfully wrote to {}", path.display())),
                 Err(e) => ToolResult::error(e.to_string()),
             }
@@ -750,6 +798,9 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
             };
             let mut updated = original.replace("\r\n", "\n");
             for edit in &edits {
+                if edit.old_text.is_empty() {
+                    return ToolResult::error("edit oldText must not be empty");
+                }
                 let old_norm = edit.old_text.replace("\r\n", "\n");
                 let new_norm = edit.new_text.replace("\r\n", "\n");
                 if !updated.contains(&old_norm) {
@@ -771,7 +822,7 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 } else {
                     updated
                 };
-                if let Err(e) = fs::write(&path, to_write.as_bytes()) {
+                if let Err(e) = write_atomic_string(&path, &to_write) {
                     return ToolResult::error(e.to_string());
                 }
             }
@@ -825,7 +876,7 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 .map(String::from)
                 .collect();
             lines.splice((start_line - 1)..end_clamped, replacement);
-            if let Err(e) = fs::write(&path, lines.join(eol).as_bytes()) {
+            if let Err(e) = write_atomic_string(&path, &lines.join(eol)) {
                 return ToolResult::error(e.to_string());
             }
             ToolResult::text(format!(
@@ -902,11 +953,14 @@ mod tests {
         let gr = call_tool(
             &roots,
             "grep_files",
-            json!({ "path": dir.to_string_lossy(), "pattern": "beta-rust-mcp" }),
+            json!({ "path": dir.to_string_lossy(), "pattern": "beta-rust-mcp", "context": 1 }),
         )
         .await;
         assert!(gr.is_error.is_none());
-        assert!(gr.content[0]["text"].as_str().unwrap().contains("2:beta-rust-mcp"));
+        let gtxt = gr.content[0]["text"].as_str().unwrap();
+        assert!(gtxt.contains("1-alpha"), "missing before-context: {gtxt}");
+        assert!(gtxt.contains("2:beta-rust-mcp"), "missing match: {gtxt}");
+        assert!(gtxt.contains("3-gamma"), "missing after-context: {gtxt}");
 
         let escape = call_tool(
             &roots,

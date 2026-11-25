@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use std::path::PathBuf;
 use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
 pub struct SshTunnelOptions {
@@ -9,6 +11,7 @@ pub struct SshTunnelOptions {
     pub ssh_port: u16,
     pub user: String,
     pub ssh_key_path: String,
+    pub known_hosts_path: Option<PathBuf>,
     pub forwards: Vec<(u16, u16)>, // (remote_port, local_port)
 }
 
@@ -45,6 +48,12 @@ pub fn start_ssh_reverse_tunnel(opts: &SshTunnelOptions) -> Result<RunningSshTun
     if !opts.ssh_key_path.trim().is_empty() {
         args.push("-i".to_string());
         args.push(opts.ssh_key_path.clone());
+        args.push("-o".to_string());
+        args.push("IdentitiesOnly=yes".to_string());
+    }
+    if let Some(ref kh) = opts.known_hosts_path {
+        args.push("-o".to_string());
+        args.push(format!("UserKnownHostsFile={}", kh.display()));
     }
     for (remote, local) in &opts.forwards {
         args.push("-R".to_string());
@@ -56,16 +65,28 @@ pub fn start_ssh_reverse_tunnel(opts: &SshTunnelOptions) -> Result<RunningSshTun
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
     #[cfg(windows)]
     {
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("failed to spawn SSH reverse tunnel to {}", opts.host))?;
+
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if !line.trim().is_empty() {
+                    warn!("ssh tunnel: {line}");
+                }
+            }
+        });
+    }
 
     info!(
         "SSH reverse tunnel started -> {}@{}:{} ({} forwards)",

@@ -6,6 +6,9 @@ pub mod path_guard;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static ATOMIC_TMP_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Atomically writes UTF-8 text to `target` using a sibling temp file + rename
 /// with brief retry on Windows sharing violations.
@@ -13,13 +16,15 @@ pub fn write_atomic_string(target: &Path, content: &str) -> io::Result<()> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
+    let seq = ATOMIC_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = target.with_extension(format!(
-        "{}.{}.tmp",
+        "{}.{}.{}.tmp",
         target
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("file"),
-        std::process::id()
+        std::process::id(),
+        seq
     ));
     fs::write(&tmp, content.as_bytes())?;
     for attempt in 0..5 {
@@ -51,4 +56,16 @@ pub fn constant_time_eq(a: &str, b: &str) -> bool {
         diff |= x ^ y;
     }
     diff == 0
+}
+
+/// Extracts a Bearer token from an HTTP Authorization header (RFC 9110 case-insensitive scheme).
+pub fn extract_bearer_token(header_val: &str) -> Option<&str> {
+    let trimmed = header_val.trim();
+    if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+        let token = trimmed[7..].trim();
+        if !token.is_empty() {
+            return Some(token);
+        }
+    }
+    None
 }

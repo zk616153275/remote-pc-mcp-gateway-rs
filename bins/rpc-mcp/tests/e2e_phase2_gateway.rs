@@ -300,5 +300,106 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         "workbench_status must be handled: {wb_st_text}"
     );
 
+    // Test 8 (P0 regression): confidential OAuth client cannot bypass client_secret by omitting it
+    let conf_reg: Value = client
+        .post(format!("{base}/oauth/register"))
+        .json(&json!({
+            "client_name": "Confidential Client",
+            "redirect_uris": ["https://example.com/cb"],
+            "token_endpoint_auth_method": "client_secret_post"
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let conf_id = conf_reg["client_id"].as_str().unwrap().to_string();
+    assert!(conf_reg["client_secret"].as_str().is_some());
+    let conf_auth = client
+        .post(format!("{base}/oauth/authorize"))
+        .form(&[
+            ("client_id", conf_id.as_str()),
+            ("redirect_uri", "https://example.com/cb"),
+            ("response_type", "code"),
+            ("code_challenge", challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("decision", "approve"),
+            ("approval_key", "owner-approval-xyz"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    let conf_loc = conf_auth.headers().get("location").unwrap().to_str().unwrap();
+    let conf_code = Url::parse(conf_loc)
+        .unwrap()
+        .query_pairs()
+        .find(|(k, _)| k == "code")
+        .unwrap()
+        .1
+        .into_owned();
+    let missing_sec_resp = client
+        .post(format!("{base}/oauth/token"))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", conf_code.as_str()),
+            ("client_id", conf_id.as_str()),
+            ("redirect_uri", "https://example.com/cb"),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing_sec_resp.status().as_u16(), 401);
+
+    // Test 9 (P0 regression): readonly gateway rejects run_command and workbench_status
+    let ro_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ro_port = ro_listener.local_addr().unwrap().port();
+    let (ro_app, _ro_handle) = build_gw_router(GatewayServerConfig {
+        host: "127.0.0.1".into(),
+        port: ro_port,
+        secret: "ro".into(),
+        mode: "readonly".into(),
+        enable_commands: true,
+        enable_chrome: false,
+        fs_url: format!("http://127.0.0.1:{fs_port}/mcp"),
+        fs_token: "fs-secret".into(),
+        workbench_url: format!("http://127.0.0.1:{wb_port}/mcp"),
+        workbench_token: "wb-secret".into(),
+        chrome_url: String::new(),
+        chrome_token: String::new(),
+        workspace_root: ws.to_string_lossy().to_string(),
+        allowed_roots: vec![ws.to_string_lossy().to_string()],
+        instance_label: "RO-PC".into(),
+        oauth: OAuthConfig {
+            enabled: false,
+            ..OAuthConfig::default()
+        },
+        audit_log: None,
+        task_dir: None,
+        vision: rpc_mcp_gateway::VisionConfig::default(),
+    });
+    tokio::spawn(async move {
+        let _ = axum::serve(ro_listener, ro_app).await;
+    });
+    let ro_cmd: Value = client
+        .post(format!("http://127.0.0.1:{ro_port}/ro/mcp"))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "tools/call",
+            "params": {
+                "name": "run_command",
+                "arguments": { "commandLine": "hostname", "cwd": ws.to_string_lossy() }
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(ro_cmd["result"]["isError"], true);
+
     let _ = fs::remove_dir_all(&tmp);
 }

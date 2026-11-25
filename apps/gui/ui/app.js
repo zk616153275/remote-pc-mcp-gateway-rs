@@ -5,6 +5,8 @@ let currentConfig = null;
 let selectedMode = "cloudflare-quick";
 let activeFilter = "all";
 let lastActivities = [];
+let lastLogSignature = "";
+let isStarting = false;
 let isZh = true;
 let toastTimer = null;
 
@@ -188,7 +190,13 @@ const I18N = {
 };
 
 const t = (key) => (isZh ? I18N.zh[key] : I18N.en[key]) || key;
-const esc = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const esc = (s) =>
+  String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 function toast(msg) {
   const el = $("toast");
@@ -310,6 +318,15 @@ function renderActivities(items, stats) {
 }
 
 function renderLogs(logs) {
+  const sig =
+    logs && logs.length
+      ? `${isZh}:${logs.length}:${logs[0].time}:${logs[logs.length - 1].time}:${logs[logs.length - 1].message}`
+      : `${isZh}:empty`;
+  if (sig === lastLogSignature) {
+    return;
+  }
+  lastLogSignature = sig;
+
   const html =
     logs && logs.length
       ? logs
@@ -322,8 +339,11 @@ function renderLogs(logs) {
 
   for (const id of ["log-console", "mini-log-console"]) {
     const el = $(id);
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     el.innerHTML = html;
-    el.scrollTop = el.scrollHeight;
+    if (nearBottom) {
+      el.scrollTop = el.scrollHeight;
+    }
   }
 }
 
@@ -395,8 +415,10 @@ function applyStatus(st) {
   const pill = $("status-pill");
   pill.classList.toggle("running", st.running);
   $("status-text").textContent = st.running ? t("statusRunning") : t("statusStopped");
-  $("btn-start").disabled = st.running;
-  $("btn-start-label").textContent = t("btnStart");
+  if (!isStarting) {
+    $("btn-start").disabled = st.running;
+    $("btn-start-label").textContent = t("btnStart");
+  }
   $("btn-stop").disabled = !st.running;
 
   $("step-2").classList.toggle("done", st.running);
@@ -423,7 +445,9 @@ function applyStatus(st) {
   }
   renderLogs(st.logs);
   renderActivities(st.activities, st.stats);
-  showAlert(st.lastError || "");
+  if (st.lastError) {
+    showAlert(st.lastError);
+  }
 }
 
 // Navigation & buttons
@@ -537,15 +561,18 @@ $("btn-start").addEventListener("click", async () => {
     switchTab("roots");
     return;
   }
+  isStarting = true;
   $("btn-start").disabled = true;
   $("btn-start-label").textContent = t("btnStarting");
   showAlert("");
   try {
     const st = await invoke("start_services", { cfg });
+    isStarting = false;
     setDirty(false);
     applyStatus(st);
     toast(t("toastStarted"));
   } catch (e) {
+    isStarting = false;
     showAlert(String(e));
     $("btn-start").disabled = false;
     $("btn-start-label").textContent = t("btnStart");
@@ -556,6 +583,7 @@ $("btn-stop").addEventListener("click", async () => {
   if (!invoke) return;
   try {
     const st = await invoke("stop_services");
+    showAlert("");
     applyStatus(st);
     toast(t("toastStopped"));
   } catch (e) {

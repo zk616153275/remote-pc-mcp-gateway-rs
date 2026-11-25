@@ -1,7 +1,13 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rpc_mcp_bridge::{start_cloudflare_tunnel, CloudflareOptions};
-use rpc_mcp_chrome_broker::{serve_chrome_broker, ChromeBrokerConfig};
+use rpc_mcp_bridge::orchestrator::ServiceHealth;
+use rpc_mcp_bridge::{
+    start_cloudflare_tunnel, start_ssh_reverse_tunnel, write_runtime_status, CloudflareOptions,
+    RuntimeStatus, SshTunnelOptions,
+};
+use rpc_mcp_chrome_broker::{
+    build_router as build_chrome_router, serve_chrome_broker, ChromeBrokerConfig,
+};
 use rpc_mcp_core::config::AppConfig;
 use rpc_mcp_core::path_guard::AllowedRoots;
 use rpc_mcp_fs::{serve_fs_mcp, FsServerConfig};
@@ -13,7 +19,7 @@ use rpc_mcp_workbench::{run_job_runner, serve_workbench, WorkbenchConfig};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(
@@ -27,6 +33,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Run unified local Windows agent (FS MCP + AI Workbench in one process)
     Agent {
@@ -86,6 +93,8 @@ enum Commands {
         oauth_client_store: PathBuf,
         #[arg(long, default_value = "state/logs/gateway-audit.jsonl")]
         audit_log: PathBuf,
+        #[arg(long = "allowed-root")]
+        allowed_roots: Vec<String>,
         #[arg(long)]
         disable_oauth: bool,
     },
@@ -226,6 +235,7 @@ async fn main() -> Result<()> {
             oauth_approval_key,
             oauth_client_store,
             audit_log,
+            allowed_roots,
             disable_oauth,
         } => {
             let file_cfg = match config {
@@ -234,6 +244,16 @@ async fn main() -> Result<()> {
             };
             let listen_port = port.unwrap_or(file_cfg.gateway.local_port);
             let gw_secret = secret.unwrap_or(file_cfg.gateway.secret);
+            let effective_roots = if !allowed_roots.is_empty() {
+                allowed_roots
+            } else {
+                file_cfg.allowed_roots
+            };
+            let instance_label = if file_cfg.instance_label.is_empty() {
+                "Windows-PC".to_string()
+            } else {
+                file_cfg.instance_label
+            };
             let gw_cfg = GatewayServerConfig {
                 host: host.clone(),
                 port: listen_port,
@@ -251,17 +271,12 @@ async fn main() -> Result<()> {
                 workbench_token: workbench_token.unwrap_or(file_cfg.tokens.workbench_token),
                 chrome_url: chrome_url.unwrap_or_default(),
                 chrome_token: chrome_token.unwrap_or_default(),
-                workspace_root: file_cfg
-                    .allowed_roots
+                workspace_root: effective_roots
                     .first()
                     .cloned()
                     .unwrap_or_else(|| ".".into()),
-                allowed_roots: file_cfg.allowed_roots.clone(),
-                instance_label: if file_cfg.instance_label.is_empty() {
-                    "Windows-PC".into()
-                } else {
-                    file_cfg.instance_label
-                },
+                allowed_roots: effective_roots,
+                instance_label: instance_label.clone(),
                 oauth: OAuthConfig {
                     enabled: !disable_oauth,
                     issuer: oauth_issuer
@@ -269,7 +284,7 @@ async fn main() -> Result<()> {
                     mcp_path: String::new(),
                     signing_key: oauth_signing_key.unwrap_or(file_cfg.gateway.oauth_signing_key),
                     approval_key: oauth_approval_key.unwrap_or(file_cfg.gateway.approval_key),
-                    instance_label: "Windows-PC".into(),
+                    instance_label,
                     client_store_path: Some(oauth_client_store),
                     ..OAuthConfig::default()
                 },
@@ -321,19 +336,55 @@ async fn main() -> Result<()> {
                 pwsh_path: resolve_pwsh(&pwsh),
                 enable_delete_guard: cfg.guards_and_hooks.enable_delete_guard,
             };
+            let mut chrome_ok = false;
+            let mut chrome_backend = None;
+            let chrome_token = format!(
+                "{}{}",
+                uuid::Uuid::new_v4().simple(),
+                uuid::Uuid::new_v4().simple()
+            );
+            if cfg.gateway.enable_chrome {
+                match TcpListener::bind(("127.0.0.1", cfg.local_ports.chrome_mcp)).await {
+                    Ok(ch_listener) => {
+                        let mut ch_cfg = ChromeBrokerConfig::default_npx(
+                            cfg.local_ports.chrome_mcp,
+                            cfg.local_ports.chrome_cdp,
+                        );
+                        ch_cfg.bearer_token = Some(chrome_token.clone());
+                        let (ch_app, backend) = build_chrome_router(ch_cfg);
+                        tokio::spawn(async move {
+                            let _ = axum::serve(ch_listener, ch_app).await;
+                        });
+                        chrome_backend = Some(backend);
+                        chrome_ok = true;
+                        info!(
+                            "READY rpc-mcp-chrome-broker listening on http://127.0.0.1:{}",
+                            cfg.local_ports.chrome_mcp
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Chrome broker skipped (port busy): {e}");
+                    }
+                }
+            }
+
             let gw_cfg = GatewayServerConfig {
                 host: host.clone(),
                 port: cfg.gateway.local_port,
                 secret: cfg.gateway.secret.clone(),
                 mode: cfg.gateway.mode.clone(),
                 enable_commands: cfg.gateway.enable_commands,
-                enable_chrome: false,
+                enable_chrome: chrome_ok,
                 fs_url: format!("http://127.0.0.1:{}/mcp", cfg.local_ports.fs_bearer),
                 fs_token: cfg.tokens.fs_token.clone(),
                 workbench_url: format!("http://127.0.0.1:{}/mcp", cfg.local_ports.workbench),
                 workbench_token: cfg.tokens.workbench_token.clone(),
-                chrome_url: String::new(),
-                chrome_token: String::new(),
+                chrome_url: if chrome_ok {
+                    format!("http://127.0.0.1:{}/mcp", cfg.local_ports.chrome_mcp)
+                } else {
+                    String::new()
+                },
+                chrome_token: if chrome_ok { chrome_token } else { String::new() },
                 workspace_root: cfg
                     .allowed_roots
                     .first()
@@ -365,21 +416,87 @@ async fn main() -> Result<()> {
             let gw_addr: SocketAddr = format!("127.0.0.1:{}", gw_cfg.port).parse()?;
             let (gw_router, gw_handle) = build_gateway_router(gw_cfg);
 
-            let _tunnel = if let Some(cf_exe) = cloudflared {
+            let mut public_origin = format!("http://127.0.0.1:{}", cfg.gateway.local_port);
+            let mut _cf_tunnel = None;
+            let mut _ssh_tunnel = None;
+
+            if cfg.connection_mode == "vps" || cfg.connection_mode == "vps-ssh" {
+                let mut forwards = vec![
+                    (cfg.vps.remote_fs_port, cfg.local_ports.fs_bearer),
+                    (cfg.vps.remote_workbench_port, cfg.local_ports.workbench),
+                ];
+                if chrome_ok {
+                    forwards.push((cfg.vps.remote_chrome_mcp_port, cfg.local_ports.chrome_mcp));
+                }
+                let known_hosts = config.parent().map(|p| p.join("vps-known-hosts"));
+                let st = start_ssh_reverse_tunnel(&SshTunnelOptions {
+                    host: cfg.vps.host.clone(),
+                    ssh_port: cfg.vps.ssh_port,
+                    user: cfg.vps.user.clone(),
+                    ssh_key_path: cfg.vps.ssh_key_path.clone(),
+                    known_hosts_path: known_hosts,
+                    forwards,
+                })?;
+                if !cfg.vps.domain.trim().is_empty() {
+                    let dom = cfg
+                        .vps
+                        .domain
+                        .trim_start_matches("https://")
+                        .trim_start_matches("http://")
+                        .trim_end_matches('/');
+                    public_origin = format!("https://{dom}");
+                    gw_handle.set_issuer(&public_origin);
+                }
+                _ssh_tunnel = Some(st);
+            } else if let Some(cf_exe) = cloudflared {
+                let cf_mode = if cfg.connection_mode == "cloudflare-named" {
+                    "named"
+                } else {
+                    "quick"
+                };
                 let t = start_cloudflare_tunnel(CloudflareOptions {
-                    mode: "quick".into(),
+                    mode: cf_mode.into(),
                     target_url: format!("http://127.0.0.1:{}", cfg.gateway.local_port),
-                    named_tunnel_token: String::new(),
-                    public_hostname: String::new(),
+                    named_tunnel_token: cfg.cloudflare.named_tunnel_token.clone(),
+                    public_hostname: cfg.cloudflare.public_hostname.clone(),
                     cloudflared_exe: cf_exe,
                 })
                 .await?;
-                gw_handle.set_issuer(&t.public_url);
-                info!("Public MCP URL: {}{}", t.public_url, mcp_path);
-                Some(t)
-            } else {
-                None
-            };
+                public_origin = t.public_url.clone();
+                gw_handle.set_issuer(&public_origin);
+                info!("Public MCP URL: {}{}", public_origin, mcp_path);
+                _cf_tunnel = Some(t);
+            }
+
+            let _ = write_runtime_status(
+                &state_dir.join("runtime-status.json"),
+                &RuntimeStatus {
+                    updated_at: String::new(),
+                    mode: cfg.connection_mode.clone(),
+                    public_origin: public_origin.clone(),
+                    mcp_url: format!("{public_origin}{mcp_path}"),
+                    fs_mcp: ServiceHealth {
+                        ok: true,
+                        detail: format!("127.0.0.1:{}", cfg.local_ports.fs_bearer),
+                    },
+                    workbench: ServiceHealth {
+                        ok: true,
+                        detail: format!("127.0.0.1:{}", cfg.local_ports.workbench),
+                    },
+                    gateway: ServiceHealth {
+                        ok: true,
+                        detail: format!("127.0.0.1:{}", cfg.gateway.local_port),
+                    },
+                    chrome_mcp: ServiceHealth {
+                        ok: chrome_ok,
+                        detail: if chrome_ok {
+                            format!("127.0.0.1:{}", cfg.local_ports.chrome_mcp)
+                        } else {
+                            "disabled".into()
+                        },
+                    },
+                },
+            );
 
             let gw_listener = TcpListener::bind(gw_addr).await?;
             let gw_fut = async move {
@@ -387,7 +504,17 @@ async fn main() -> Result<()> {
                 Ok::<(), anyhow::Error>(())
             };
 
-            tokio::try_join!(serve_fs_mcp(fs_cfg), serve_workbench(wb_cfg), gw_fut)?;
+            tokio::select! {
+                res = async { tokio::try_join!(serve_fs_mcp(fs_cfg), serve_workbench(wb_cfg), gw_fut) } => {
+                    res?;
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received Ctrl+C; shutting down rpc-mcp stack...");
+                }
+            }
+            if let Some(ref backend) = chrome_backend {
+                backend.shutdown().await;
+            }
         }
 
         Commands::JobRunner { .. } => unreachable!(),

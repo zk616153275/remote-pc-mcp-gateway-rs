@@ -84,8 +84,9 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
         .env("NO_PROXY", "127.0.0.1,localhost")
         .env("no_proxy", "127.0.0.1,localhost")
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
     #[cfg(windows)]
     {
@@ -96,7 +97,14 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
         .spawn()
         .with_context(|| format!("failed to spawn {}", opts.cloudflared_exe.display()))?;
 
+    let stderr = child.stderr.take().context("missing cloudflared stderr")?;
+    let mut lines = BufReader::new(stderr).lines();
+
     if opts.mode == "named" {
+        // Continuously drain stderr in the background to prevent pipe buffer deadlock
+        tokio::spawn(async move {
+            while let Ok(Some(_)) = lines.next_line().await {}
+        });
         let host = opts
             .public_hostname
             .trim_start_matches("https://")
@@ -111,8 +119,6 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
         });
     }
 
-    let stderr = child.stderr.take().context("missing cloudflared stderr")?;
-    let mut lines = BufReader::new(stderr).lines();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(35);
 
     while tokio::time::Instant::now() < deadline {
@@ -121,6 +127,10 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
                 if let Some(m) = trycloudflare_re().find(&line) {
                     let public_url = m.as_str().to_string();
                     info!("Cloudflare Quick Tunnel ready: {public_url} (fake_ip_bypass={fake_ip})");
+                    // Keep draining stderr so cloudflared never hits EPIPE or blocks
+                    tokio::spawn(async move {
+                        while let Ok(Some(_)) = lines.next_line().await {}
+                    });
                     return Ok(RunningTunnel {
                         child,
                         public_url,

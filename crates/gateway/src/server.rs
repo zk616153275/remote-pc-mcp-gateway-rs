@@ -4,7 +4,7 @@ use crate::oauth::{OAuthConfig, OAuthService, Platform};
 use crate::recovery::{wait_tool_definition, TaskJournal};
 use crate::vision::{inspect_image_tool_definition, run_inspect_image, VisionConfig};
 use anyhow::Result;
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, options, post};
@@ -18,8 +18,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 const READ_ONLY_FS: &[&str] = &[
@@ -223,10 +224,27 @@ impl GatewayState {
         }
         let resp = req.send().await?;
         let status = resp.status();
-        let data: Value = resp.json().await?;
+        let is_sse = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(|ct| ct.to_ascii_lowercase().contains("text/event-stream"))
+            .unwrap_or(false);
+        let raw_text = resp.text().await?;
         if !status.is_success() {
             anyhow::bail!("upstream HTTP {status}");
         }
+        let data: Value = if is_sse {
+            raw_text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:").map(str::trim))
+                .filter(|d| !d.is_empty())
+                .filter_map(|d| serde_json::from_str::<Value>(d).ok())
+                .next_back()
+                .ok_or_else(|| anyhow::anyhow!("upstream SSE stream contained no JSON-RPC payload"))?
+        } else {
+            serde_json::from_str(&raw_text)?
+        };
         if let Some(err) = data.get("error") {
             anyhow::bail!("{}", err["message"].as_str().unwrap_or("upstream RPC error"));
         }
@@ -262,32 +280,37 @@ impl GatewayState {
         let readwrite = self.cfg.mode.eq_ignore_ascii_case("readwrite");
 
         // 1. Upstream FS tools
-        if let Ok(res) = self
+        match self
             .upstream_rpc(&self.cfg.fs_url, &self.cfg.fs_token, "tools/list", json!({}))
             .await
         {
-            if let Some(arr) = res.get("tools").and_then(Value::as_array) {
-                for item in arr {
-                    let Some(raw_name) = item.get("name").and_then(Value::as_str) else {
-                        continue;
-                    };
-                    let is_ro = READ_ONLY_FS.contains(&raw_name);
-                    let is_rw = WRITE_FS.contains(&raw_name);
-                    if !is_ro && !(readwrite && is_rw) {
-                        continue;
+            Ok(res) => {
+                if let Some(arr) = res.get("tools").and_then(Value::as_array) {
+                    for item in arr {
+                        let Some(raw_name) = item.get("name").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        let is_ro = READ_ONLY_FS.contains(&raw_name);
+                        let is_rw = WRITE_FS.contains(&raw_name);
+                        if !is_ro && !(readwrite && is_rw) {
+                            continue;
+                        }
+                        let ns_name = format!("fs_{raw_name}");
+                        if platform == Platform::Google && ns_name == "fs_read_media_file" {
+                            continue;
+                        }
+                        let mut tool = item.clone();
+                        tool["name"] = json!(ns_name);
+                        tool["annotations"] = json!({
+                            "readOnlyHint": is_ro,
+                            "destructiveHint": !is_ro
+                        });
+                        all.push(tool);
                     }
-                    let ns_name = format!("fs_{raw_name}");
-                    if platform == Platform::Google && ns_name == "fs_read_media_file" {
-                        continue;
-                    }
-                    let mut tool = item.clone();
-                    tool["name"] = json!(ns_name);
-                    tool["annotations"] = json!({
-                        "readOnlyHint": is_ro,
-                        "destructiveHint": !is_ro
-                    });
-                    all.push(tool);
                 }
+            }
+            Err(e) => {
+                warn!("Failed to list upstream FS tools from {}: {e}", self.cfg.fs_url);
             }
         }
 
@@ -301,7 +324,7 @@ impl GatewayState {
 
         // 3. Optional Chrome MCP tools
         if self.cfg.enable_chrome && !self.cfg.chrome_url.is_empty() {
-            if let Ok(res) = self
+            match self
                 .upstream_rpc(
                     &self.cfg.chrome_url,
                     &self.cfg.chrome_token,
@@ -310,28 +333,33 @@ impl GatewayState {
                 )
                 .await
             {
-                if let Some(arr) = res.get("tools").and_then(Value::as_array) {
-                    for item in arr {
-                        let Some(raw_name) = item.get("name").and_then(Value::as_str) else {
-                            continue;
-                        };
-                        if raw_name == "select_page" {
-                            continue;
+                Ok(res) => {
+                    if let Some(arr) = res.get("tools").and_then(Value::as_array) {
+                        for item in arr {
+                            let Some(raw_name) = item.get("name").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            if raw_name == "select_page" {
+                                continue;
+                            }
+                            let mut tool = item.clone();
+                            let ns_name = format!("chrome_{raw_name}");
+                            tool["name"] = json!(ns_name);
+                            if platform == Platform::Google && ns_name == "chrome_take_screenshot" {
+                                let desc = tool
+                                    .get("description")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                tool["description"] = json!(format!(
+                                    "{desc} In Google Gemini Web, inline image blocks are stripped to {{}}; always pass an explicit absolute filePath inside an allowed directory."
+                                ));
+                            }
+                            all.push(tool);
                         }
-                        let mut tool = item.clone();
-                        let ns_name = format!("chrome_{raw_name}");
-                        tool["name"] = json!(ns_name);
-                        if platform == Platform::Google && ns_name == "chrome_take_screenshot" {
-                            let desc = tool
-                                .get("description")
-                                .and_then(Value::as_str)
-                                .unwrap_or("");
-                            tool["description"] = json!(format!(
-                                "{desc} In Google Gemini Web, inline image blocks are stripped to {{}}; always pass an explicit absolute filePath inside an allowed directory."
-                            ));
-                        }
-                        all.push(tool);
                     }
+                }
+                Err(e) => {
+                    warn!("Failed to list upstream Chrome tools from {}: {e}", self.cfg.chrome_url);
                 }
             }
         }
@@ -396,10 +424,114 @@ impl GatewayState {
                 .unwrap_or(500)
                 .clamp(100, 20_000);
             if task_id.is_empty() {
-                tokio::time::sleep(std::time::Duration::from_millis(wait_ms.min(2000))).await;
+                tokio::time::sleep(Duration::from_millis(wait_ms.min(2000))).await;
                 return json!({ "content": [{ "type": "text", "text": "{\"status\":\"ready\"}" }] });
             }
             if let Some(rec) = self.journal.get(task_id, owner) {
+                let is_still_running = rec.status == "running"
+                    || rec
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.pointer("/content/0/text"))
+                        .and_then(Value::as_str)
+                        .and_then(|t| serde_json::from_str::<Value>(t).ok())
+                        .and_then(|v| v.get("state").and_then(Value::as_str).map(String::from))
+                        .map(|s| matches!(s.as_str(), "running" | "starting"))
+                        .unwrap_or(false);
+
+                if !is_still_running {
+                    if let Some(res) = rec.result {
+                        return res;
+                    }
+                }
+
+                // Actively poll workbench for still-running command tasks
+                let session_id = hex::encode(Sha256::digest(
+                    format!("{}:{owner}:{task_id}", self.cfg.instance_label).as_bytes(),
+                ));
+                if let Ok(hook) = self
+                    .workbench_post(
+                        "/hook",
+                        json!({ "phase": "lookup", "agent": "mcp-gateway", "sessionId": session_id, "turnId": task_id }),
+                    )
+                    .await
+                {
+                    if let Some(ctx_id) = hook.get("contextId").and_then(Value::as_str) {
+                        let deadline = tokio::time::Instant::now() + Duration::from_millis(wait_ms);
+                        loop {
+                            if let Ok(st_res) = self
+                                .upstream_rpc(
+                                    &self.cfg.workbench_url,
+                                    &self.cfg.workbench_token,
+                                    "tools/call",
+                                    json!({ "name": "get_task_status", "arguments": { "contextId": ctx_id } }),
+                                )
+                                .await
+                            {
+                                let st_txt = st_res
+                                    .pointer("/content/0/text")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("{}");
+                                if let Ok(st_json) = serde_json::from_str::<Value>(st_txt) {
+                                    if let Some(cmd) = st_json
+                                        .pointer("/tasks/0/commands")
+                                        .and_then(Value::as_array)
+                                        .and_then(|arr| {
+                                            arr.iter().find(|c| {
+                                                c.get("requestId").and_then(Value::as_str)
+                                                    == Some(task_id)
+                                            })
+                                        })
+                                    {
+                                        let st_str = cmd["state"].as_str().unwrap_or("");
+                                        let terminal = matches!(
+                                            st_str,
+                                            "exited" | "stopped" | "failed" | "interrupted"
+                                        );
+                                        if terminal || tokio::time::Instant::now() >= deadline {
+                                            let cid = cmd["commandId"].as_str().unwrap_or("");
+                                            let out_res = self
+                                                .upstream_rpc(
+                                                    &self.cfg.workbench_url,
+                                                    &self.cfg.workbench_token,
+                                                    "tools/call",
+                                                    json!({ "name": "get_command_output", "arguments": { "commandId": cid, "offset": 0, "maxBytes": 65536 } }),
+                                                )
+                                                .await
+                                                .ok()
+                                                .and_then(|v| {
+                                                    v.pointer("/content/0/text")
+                                                        .and_then(Value::as_str)
+                                                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+                                                })
+                                                .unwrap_or(Value::Null);
+                                            let payload = json!({
+                                                "task_id": task_id,
+                                                "commandId": cid,
+                                                "state": st_str,
+                                                "exitCode": cmd["exitCode"],
+                                                "timedOut": cmd["timedOut"],
+                                                "processes": cmd["processes"],
+                                                "ports": cmd["ports"],
+                                                "output": out_res,
+                                            });
+                                            let wrapped = json!({ "content": [{ "type": "text", "text": payload.to_string() }] });
+                                            if terminal {
+                                                self.journal.record_finished(task_id, wrapped.clone());
+                                            }
+                                            return wrapped;
+                                        }
+                                    }
+                                }
+                            }
+                            if tokio::time::Instant::now() >= deadline {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                        }
+                    }
+                }
+
                 if let Some(res) = rec.result {
                     return res;
                 }
@@ -412,7 +544,12 @@ impl GatewayState {
             if platform != Platform::Google {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "inspect_image is only exposed to Google Gemini sessions" }] });
             }
-            return run_inspect_image(&self.http, &self.cfg.vision, &args).await;
+            let roots_for_check: Vec<String> = if self.cfg.allowed_roots.is_empty() {
+                vec![self.cfg.workspace_root.clone()]
+            } else {
+                self.cfg.allowed_roots.clone()
+            };
+            return run_inspect_image(&self.http, &self.cfg.vision, &roots_for_check, &args).await;
         }
 
         // Google Gemini image-block stripping protection
@@ -486,6 +623,13 @@ impl GatewayState {
 
         // Workbench inspection / stop / review tools
         if matches!(name, "workbench_status" | "workbench_stop" | "workbench_review") {
+            let readwrite = self.cfg.mode.eq_ignore_ascii_case("readwrite");
+            if !self.cfg.enable_commands || !readwrite {
+                return json!({
+                    "isError": true,
+                    "content": [{ "type": "text", "text": format!("Tool not allowed in current mode: {name}") }]
+                });
+            }
             let Some(task_id) = args.get("task_id").and_then(Value::as_str) else {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "task_id is required" }] });
             };
@@ -584,6 +728,9 @@ impl GatewayState {
             if !self.cfg.enable_commands {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "Command execution is disabled" }] });
             }
+            if name == "run_command" && !self.cfg.mode.eq_ignore_ascii_case("readwrite") {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "run_command is not allowed in readonly mode" }] });
+            }
             let raw_cwd = args
                 .get("cwd")
                 .and_then(Value::as_str)
@@ -643,6 +790,7 @@ impl GatewayState {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "workbench hook returned no contextId" }] });
             };
 
+            let mut terminal = true;
             let result = match self
                 .upstream_rpc(
                     &self.cfg.workbench_url,
@@ -667,6 +815,11 @@ impl GatewayState {
                 Ok(mut res) => {
                     if let Some(txt) = res.pointer("/content/0/text").and_then(Value::as_str) {
                         if let Ok(mut parsed) = serde_json::from_str::<Value>(txt) {
+                            if let Some(st) = parsed.get("state").and_then(Value::as_str) {
+                                if matches!(st, "running" | "starting") {
+                                    terminal = false;
+                                }
+                            }
                             if let Some(obj) = parsed.as_object_mut() {
                                 obj.insert("task_id".into(), json!(task_id));
                                 res["content"][0]["text"] = json!(parsed.to_string());
@@ -677,7 +830,9 @@ impl GatewayState {
                 }
                 Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
             };
-            self.journal.record_finished(&task_id, result.clone());
+            if terminal {
+                self.journal.record_finished(&task_id, result.clone());
+            }
             return result;
         }
 
@@ -685,19 +840,41 @@ impl GatewayState {
     }
 }
 
-async fn cors_preflight() -> Response {
-    let mut resp = StatusCode::NO_CONTENT.into_response();
+fn with_cors(mut resp: Response) -> Response {
     let h = resp.headers_mut();
     h.insert("access-control-allow-origin", HeaderValue::from_static("*"));
     h.insert(
         "access-control-allow-methods",
-        HeaderValue::from_static("GET, POST, OPTIONS"),
+        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
     );
     h.insert(
         "access-control-allow-headers",
-        HeaderValue::from_static("authorization, content-type, accept, mcp-protocol-version"),
+        HeaderValue::from_static("authorization, content-type, accept, mcp-protocol-version, mcp-session-id"),
+    );
+    h.insert(
+        "access-control-expose-headers",
+        HeaderValue::from_static("www-authenticate, mcp-session-id"),
     );
     resp
+}
+
+async fn cors_preflight() -> Response {
+    with_cors(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn mcp_delete(State(state): State<Arc<GatewayState>>, headers: HeaderMap) -> Response {
+    if state.oauth.enabled() && state.oauth.authenticate_bearer(&headers).is_none() {
+        let mut resp = (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
+        if let Ok(val) = HeaderValue::from_str(&state.oauth.challenge_header()) {
+            resp.headers_mut().insert("www-authenticate", val);
+        }
+        return with_cors(resp);
+    }
+    with_cors(StatusCode::NO_CONTENT.into_response())
 }
 
 async fn healthz(State(state): State<Arc<GatewayState>>) -> impl IntoResponse {
@@ -785,7 +962,7 @@ async fn mcp_handler(
                 if let Ok(val) = HeaderValue::from_str(&state.oauth.challenge_header()) {
                     resp.headers_mut().insert("www-authenticate", val);
                 }
-                return resp;
+                return with_cors(resp);
             }
         }
     } else {
@@ -796,16 +973,18 @@ async fn mcp_handler(
     };
 
     let Ok(payload) = serde_json::from_str::<Value>(&body) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "jsonrpc": "2.0", "error": { "code": -32700, "message": "Parse error" } })),
-        )
-            .into_response();
+        return with_cors(
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "jsonrpc": "2.0", "error": { "code": -32700, "message": "Parse error" } })),
+            )
+                .into_response(),
+        );
     };
 
     let id = payload.get("id").cloned();
     if id.is_none() {
-        return StatusCode::ACCEPTED.into_response();
+        return with_cors(StatusCode::ACCEPTED.into_response());
     }
     let id = id.unwrap();
     let method = payload.get("method").and_then(Value::as_str).unwrap_or("");
@@ -856,7 +1035,7 @@ async fn mcp_handler(
         }),
     };
 
-    (StatusCode::OK, Json(resp_body)).into_response()
+    with_cors((StatusCode::OK, Json(resp_body)).into_response())
 }
 
 pub fn build_router(cfg: GatewayServerConfig) -> (Router, GatewayHandle) {
@@ -872,6 +1051,8 @@ pub fn build_router(cfg: GatewayServerConfig) -> (Router, GatewayHandle) {
         journal: TaskJournal::new(cfg.task_dir.clone()),
         lanes: ServiceLanes::default_lanes(),
         http: Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(180))
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client"),
@@ -912,8 +1093,14 @@ pub fn build_router(cfg: GatewayServerConfig) -> (Router, GatewayHandle) {
                 .options(cors_preflight),
         )
         .route("/oauth/token", post(oauth_token).options(cors_preflight))
-        .route(&mcp_path, post(mcp_handler).options(cors_preflight))
+        .route(
+            &mcp_path,
+            post(mcp_handler)
+                .delete(mcp_delete)
+                .options(cors_preflight),
+        )
         .route("/", options(cors_preflight))
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .with_state(state);
 
     (router, handle)

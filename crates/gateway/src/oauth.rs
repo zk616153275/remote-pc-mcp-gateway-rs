@@ -4,7 +4,7 @@ use base64::engine::general_purpose::{STANDARD as B64_STD, URL_SAFE_NO_PAD as B6
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use rand::RngCore;
-use rpc_mcp_core::{constant_time_eq, write_atomic_string};
+use rpc_mcp_core::{constant_time_eq, extract_bearer_token, write_atomic_string};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -103,11 +103,16 @@ pub struct AuthIdentity {
     pub platform: Platform,
 }
 
+const MAX_REGISTERED_CLIENTS: usize = 128;
+const AUTH_FAIL_WINDOW_SEC: u64 = 300;
+const AUTH_MAX_FAILURES: usize = 10;
+
 pub struct OAuthService {
     cfg: OAuthConfig,
     issuer: RwLock<String>,
     clients: Mutex<HashMap<String, ClientRecord>>,
     codes: Mutex<HashMap<String, AuthCodeRecord>>,
+    failed_approvals: Mutex<Vec<u64>>,
 }
 
 fn now_sec() -> u64 {
@@ -302,6 +307,7 @@ impl OAuthService {
             issuer: RwLock::new(issuer),
             clients: Mutex::new(clients),
             codes: Mutex::new(HashMap::new()),
+            failed_approvals: Mutex::new(Vec::new()),
         })
     }
 
@@ -352,6 +358,9 @@ impl OAuthService {
     }
 
     fn verify_token(&self, raw: &str, expected_prefix: &str) -> Option<TokenClaims> {
+        if self.cfg.signing_key.is_empty() {
+            return None;
+        }
         let mut parts = raw.split('.');
         let prefix = parts.next()?;
         let payload = parts.next()?;
@@ -378,8 +387,7 @@ impl OAuthService {
         let token = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.strip_prefix("Bearer "))?
-            .trim();
+            .and_then(extract_bearer_token)?;
         let claims = self.verify_token(token, "rmcp")?;
         if claims.typ != "at" {
             return None;
@@ -471,6 +479,16 @@ impl OAuthService {
 
         {
             let mut clients = self.clients.lock().unwrap();
+            if clients.len() >= MAX_REGISTERED_CLIENTS {
+                if let Some(oldest_id) = clients
+                    .iter()
+                    .filter(|(_, c)| !c.builtin)
+                    .min_by_key(|(_, c)| c.last_used_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    clients.remove(&oldest_id);
+                }
+            }
             clients.insert(client_id.clone(), rec);
             self.persist_clients(&clients);
         }
@@ -597,11 +615,34 @@ impl OAuthService {
             return err_resp(StatusCode::BAD_REQUEST, "access_denied", None);
         }
 
+        if self.cfg.approval_key.is_empty() || self.cfg.signing_key.is_empty() {
+            return err_resp(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "server_error",
+                Some("OAuth approval_key and signing_key must be configured"),
+            );
+        }
+
+        // Brute-force rate limiting on Owner Approval Key submissions
+        let now = now_sec();
+        {
+            let mut fails = self.failed_approvals.lock().unwrap();
+            fails.retain(|&ts| now.saturating_sub(ts) < AUTH_FAIL_WINDOW_SEC);
+            if fails.len() >= AUTH_MAX_FAILURES {
+                return err_resp(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "access_denied",
+                    Some("Too many failed approval attempts; please retry later."),
+                );
+            }
+        }
+
         let submitted = params
             .get("approval_key")
             .map(|s| s.trim())
             .unwrap_or("");
         if !constant_time_eq(submitted, &self.cfg.approval_key) {
+            self.failed_approvals.lock().unwrap().push(now);
             let msg = if is_zh {
                 "授权密钥不正确，请从本机面板重新复制后再试。"
             } else {
@@ -624,6 +665,7 @@ impl OAuthService {
             )
                 .into_response();
         }
+        self.failed_approvals.lock().unwrap().clear();
 
         let code = random_b64url(32);
         {
@@ -642,7 +684,9 @@ impl OAuthService {
             );
         }
 
-        let mut dest = Url::parse(&redirect_uri).unwrap();
+        let Ok(mut dest) = Url::parse(&redirect_uri) else {
+            return err_resp(StatusCode::BAD_REQUEST, "invalid_request", Some("invalid redirect_uri"));
+        };
         {
             let mut qp = dest.query_pairs_mut();
             qp.append_pair("code", &code);
@@ -651,9 +695,11 @@ impl OAuthService {
             }
         }
 
+        let Ok(loc_val) = HeaderValue::from_str(dest.as_str()) else {
+            return err_resp(StatusCode::BAD_REQUEST, "invalid_request", Some("invalid redirect location"));
+        };
         let mut resp = StatusCode::FOUND.into_response();
-        resp.headers_mut()
-            .insert("location", HeaderValue::from_str(dest.as_str()).unwrap());
+        resp.headers_mut().insert("location", loc_val);
         resp.headers_mut()
             .insert("cache-control", HeaderValue::from_static("no-store"));
         resp
@@ -691,16 +737,22 @@ impl OAuthService {
                     return err_resp(StatusCode::BAD_REQUEST, "invalid_grant", None);
                 }
 
-                let client = self.clients.lock().unwrap().get(&client_id).cloned();
+                let client = {
+                    let mut clients = self.clients.lock().unwrap();
+                    if let Some(c) = clients.get_mut(&client_id) {
+                        c.last_used_at = now;
+                        Some(c.clone())
+                    } else {
+                        None
+                    }
+                };
                 if let Some(ref c) = client {
                     if let Some(ref expected_sec) = c.client_secret {
-                        if !client_secret.is_empty()
-                            && !constant_time_eq(&client_secret, expected_sec)
-                        {
+                        if !constant_time_eq(&client_secret, expected_sec) {
                             return err_resp(
                                 StatusCode::UNAUTHORIZED,
                                 "invalid_client",
-                                Some("invalid client_secret"),
+                                Some("invalid or missing client_secret"),
                             );
                         }
                     }
@@ -775,6 +827,21 @@ impl OAuthService {
                     || (!client_id.is_empty() && client_id != claims.client_id)
                 {
                     return err_resp(StatusCode::BAD_REQUEST, "invalid_grant", None);
+                }
+                {
+                    let mut clients = self.clients.lock().unwrap();
+                    if let Some(c) = clients.get_mut(&claims.client_id) {
+                        if let Some(ref expected_sec) = c.client_secret {
+                            if !constant_time_eq(&client_secret, expected_sec) {
+                                return err_resp(
+                                    StatusCode::UNAUTHORIZED,
+                                    "invalid_client",
+                                    Some("invalid or missing client_secret"),
+                                );
+                            }
+                        }
+                        c.last_used_at = now;
+                    }
                 }
                 let at = self.sign_token(
                     "rmcp",

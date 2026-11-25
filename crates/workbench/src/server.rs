@@ -7,20 +7,29 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use rpc_mcp_core::delete_guard::{DeleteGuard, GuardDecision};
-use rpc_mcp_core::{constant_time_eq, write_atomic_string};
+use rpc_mcp_core::{constant_time_eq, extract_bearer_token, write_atomic_string};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 use tokio::net::TcpListener;
 use tracing::info;
 use uuid::Uuid;
+
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
 
 #[derive(Clone)]
 pub struct WorkbenchConfig {
@@ -245,6 +254,31 @@ impl WorkbenchEngine {
                 "error": st.error,
             });
         }
+        // Detect dead startup: if spec.json is >15s old, no status.json was ever written,
+        // and owner.lock is not held, the job-runner failed before initializing.
+        if !locked {
+            if let Ok(meta) = fs::metadata(dir.join("spec.json")) {
+                if let Ok(modified) = meta.modified() {
+                    if SystemTime::now()
+                        .duration_since(modified)
+                        .unwrap_or_default()
+                        > Duration::from_secs(15)
+                    {
+                        return json!({
+                            "commandId": command_id,
+                            "state": "failed",
+                            "exitCode": 1,
+                            "timedOut": false,
+                            "processes": [],
+                            "ports": [],
+                            "settling": false,
+                            "stale": false,
+                            "error": "job-runner exited before writing initial status",
+                        });
+                    }
+                }
+            }
+        }
         json!({
             "commandId": command_id,
             "state": if locked { "running" } else { "starting" },
@@ -322,17 +356,33 @@ impl WorkbenchEngine {
 
         if let Ok(mut f) = fs::File::open(&log_path) {
             let file_len = f.metadata().map(|m| m.len()).unwrap_or(0);
-            if offset > file_len {
-                next_offset = 0;
-                truncated = true;
+            // Parse optional {"logBase": N} header written on log rotation so offsets remain logical
+            let mut log_base = 0u64;
+            {
+                let mut first_line = String::new();
+                let mut reader = BufReader::new(&f);
+                if reader.read_line(&mut first_line).is_ok() {
+                    if let Ok(val) = serde_json::from_str::<Value>(first_line.trim()) {
+                        if let Some(b) = val.get("logBase").and_then(Value::as_u64) {
+                            log_base = b;
+                        }
+                    }
+                }
             }
-            if f.seek(SeekFrom::Start(next_offset)).is_ok() {
-                let to_read = ((file_len.saturating_sub(next_offset)) as usize).min(max_bytes);
+            let total_logical = log_base.saturating_add(file_len);
+            let mut rel_offset = if offset < log_base || offset > total_logical {
+                truncated = true;
+                0u64
+            } else {
+                offset - log_base
+            };
+            if f.seek(SeekFrom::Start(rel_offset)).is_ok() {
+                let to_read = ((file_len.saturating_sub(rel_offset)) as usize).min(max_bytes);
                 let mut buf = vec![0u8; to_read];
                 if let Ok(n) = f.read(&mut buf) {
                     let slice = &buf[..n];
                     if let Some(last_nl) = slice.iter().rposition(|&b| b == b'\n') {
-                        next_offset += (last_nl + 1) as u64;
+                        rel_offset += (last_nl + 1) as u64;
                         let chunk = String::from_utf8_lossy(&slice[..last_nl]);
                         for line in chunk.lines() {
                             if let Ok(val) = serde_json::from_str::<Value>(line) {
@@ -345,7 +395,8 @@ impl WorkbenchEngine {
                             }
                         }
                     }
-                    has_more = next_offset < file_len;
+                    next_offset = log_base.saturating_add(rel_offset);
+                    has_more = rel_offset < file_len;
                 }
             }
         }
@@ -372,7 +423,8 @@ impl WorkbenchEngine {
             "run_command" => {
                 let context_id = args["contextId"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("contextId is required"))?;
+                    .filter(|s| is_safe_id(s))
+                    .ok_or_else(|| anyhow::anyhow!("valid contextId is required"))?;
                 let cmd_name = args["name"].as_str().unwrap_or("command");
                 let command = args["command"]
                     .as_str()
@@ -469,7 +521,8 @@ impl WorkbenchEngine {
             "get_task_status" => {
                 let context_id = args["contextId"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("contextId is required"))?;
+                    .filter(|s| is_safe_id(s))
+                    .ok_or_else(|| anyhow::anyhow!("valid contextId is required"))?;
                 let ctx: SessionRecord = self
                     .read_json(&self.context_file(context_id))
                     .ok_or_else(|| anyhow::anyhow!("unknown contextId: {context_id}"))?;
@@ -480,7 +533,8 @@ impl WorkbenchEngine {
             "get_command_output" => {
                 let command_id = args["commandId"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("commandId is required"))?;
+                    .filter(|s| is_safe_id(s))
+                    .ok_or_else(|| anyhow::anyhow!("valid commandId is required"))?;
                 let offset = args["offset"].as_u64().unwrap_or(0);
                 let max_bytes = args["maxBytes"].as_u64().unwrap_or(65536).clamp(1024, 65536) as usize;
                 let wait_ms = args["waitMs"].as_u64().unwrap_or(0).min(15_000);
@@ -502,7 +556,8 @@ impl WorkbenchEngine {
             "stop_command" => {
                 let command_id = args["commandId"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("commandId is required"))?;
+                    .filter(|s| is_safe_id(s))
+                    .ok_or_else(|| anyhow::anyhow!("valid commandId is required"))?;
                 let dir = self.command_dir(command_id);
                 if dir.exists() {
                     write_atomic_string(
@@ -527,7 +582,8 @@ impl WorkbenchEngine {
             "complete_review" => {
                 let context_id = args["contextId"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("contextId is required"))?;
+                    .filter(|s| is_safe_id(s))
+                    .ok_or_else(|| anyhow::anyhow!("valid contextId is required"))?;
                 let revision = args["revision"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("revision is required"))?;
@@ -555,8 +611,43 @@ impl WorkbenchEngine {
     }
 
     pub fn prune(&self) -> Value {
-        let _g = self.lock.lock().unwrap();
-        json!({ "pruned": 0 })
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let max_age = Duration::from_secs(24 * 3600);
+        let now = SystemTime::now();
+        let mut pruned = 0usize;
+
+        if let Ok(rd) = fs::read_dir(self.root.join("commands")) {
+            for entry in rd.flatten() {
+                let path = entry.path();
+                if !path.is_dir() || is_command_locked(&path) {
+                    continue;
+                }
+                let old = fs::metadata(&path)
+                    .and_then(|m| m.modified())
+                    .map(|t| now.duration_since(t).unwrap_or_default() > max_age)
+                    .unwrap_or(false);
+                if old && fs::remove_dir_all(&path).is_ok() {
+                    pruned += 1;
+                }
+            }
+        }
+
+        for sub in ["sessions", "contexts", "tasks"] {
+            if let Ok(rd) = fs::read_dir(self.root.join(sub)) {
+                for entry in rd.flatten() {
+                    let path = entry.path();
+                    let old = fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .map(|t| now.duration_since(t).unwrap_or_default() > max_age)
+                        .unwrap_or(false);
+                    if old && fs::remove_file(&path).is_ok() {
+                        pruned += 1;
+                    }
+                }
+            }
+        }
+
+        json!({ "pruned": pruned })
     }
 }
 
@@ -569,10 +660,10 @@ fn check_auth(headers: &HeaderMap, expected: &str) -> bool {
     let Some(raw) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
         return false;
     };
-    let Some(token) = raw.strip_prefix("Bearer ") else {
+    let Some(token) = extract_bearer_token(raw) else {
         return false;
     };
-    constant_time_eq(token.trim(), expected)
+    constant_time_eq(token, expected)
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -618,7 +709,9 @@ async fn handle_mcp_or_panel(
     if !check_auth(&headers, &state.cfg.bearer_token) {
         return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
     }
-    let id = body.get("id").cloned().unwrap_or(json!(1));
+    let Some(id) = body.get("id").cloned() else {
+        return StatusCode::ACCEPTED.into_response();
+    };
     let method = body.get("method").and_then(Value::as_str).unwrap_or("");
     let result = match method {
         "initialize" => json!({
@@ -628,6 +721,20 @@ async fn handle_mcp_or_panel(
                 "protocolVersion": "2025-06-18",
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "rpc-mcp-workbench", "version": env!("CARGO_PKG_VERSION") }
+            }
+        }),
+        "ping" => json!({ "jsonrpc": "2.0", "id": id, "result": {} }),
+        "tools/list" => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": [
+                    { "name": "run_command", "description": "Run a command in a detached Win32 Job Object" },
+                    { "name": "get_task_status", "description": "Get workbench task status" },
+                    { "name": "get_command_output", "description": "Read incremental command output" },
+                    { "name": "stop_command", "description": "Terminate a command and its process tree" },
+                    { "name": "complete_review", "description": "Acknowledge reviewed task revision" }
+                ]
             }
         }),
         "tools/call" => {

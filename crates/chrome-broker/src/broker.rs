@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use rpc_mcp_core::constant_time_eq;
+use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -156,7 +156,8 @@ impl SidecarBackend {
         cmd.args(&self.cfg.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         #[cfg(windows)]
         {
@@ -169,6 +170,17 @@ impl SidecarBackend {
 
         #[cfg(windows)]
         let job = WinJobGuard::attach_child(&child);
+
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut err_lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = err_lines.next_line().await {
+                    if !line.trim().is_empty() {
+                        warn!("chrome sidecar stderr: {line}");
+                    }
+                }
+            });
+        }
 
         let stdin = Arc::new(Mutex::new(
             child.stdin.take().context("missing sidecar stdin")?,
@@ -227,8 +239,36 @@ impl SidecarBackend {
             }
         });
 
+        // Perform MCP handshake while STILL holding `guard` so concurrent callers
+        // cannot race before initialize completes, and failed handshakes do not cache a dead sidecar.
+        let init_params = json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "rpc-mcp-chrome-broker", "version": env!("CARGO_PKG_VERSION") }
+        });
+        if let Err(e) = self
+            .send_rpc(&stdin, &pending, "initialize", init_params, 15_000)
+            .await
+        {
+            let _ = child.kill().await;
+            return Err(e);
+        }
+
+        {
+            let mut w = stdin.lock().await;
+            let notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+            if let Err(e) = w.write_all(format!("{notif}\n").as_bytes()).await {
+                let _ = child.kill().await;
+                return Err(e.into());
+            }
+            if let Err(e) = w.flush().await {
+                let _ = child.kill().await;
+                return Err(e.into());
+            }
+        }
+
         let gen = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
-        info!("Chrome MCP sidecar started (generation={gen})");
+        info!("Chrome MCP sidecar started and initialized (generation={gen})");
 
         *guard = Some(RunningSidecar {
             child,
@@ -237,23 +277,6 @@ impl SidecarBackend {
             #[cfg(windows)]
             _job: job,
         });
-        drop(guard);
-
-        // Perform MCP handshake with sidecar
-        let init_params = json!({
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": { "name": "rpc-mcp-chrome-broker", "version": env!("CARGO_PKG_VERSION") }
-        });
-        self.send_rpc(&stdin, &pending, "initialize", init_params, 15_000)
-            .await?;
-
-        {
-            let mut w = stdin.lock().await;
-            let notif = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-            w.write_all(format!("{notif}\n").as_bytes()).await?;
-            w.flush().await?;
-        }
 
         Ok((stdin, pending))
     }
@@ -276,10 +299,16 @@ impl SidecarBackend {
             "method": method,
             "params": params
         });
-        {
+        let write_res: Result<()> = async {
             let mut w = stdin.lock().await;
             w.write_all(format!("{req}\n").as_bytes()).await?;
             w.flush().await?;
+            Ok(())
+        }
+        .await;
+        if let Err(e) = write_res {
+            pending.lock().await.remove(&id);
+            return Err(e);
         }
 
         match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
@@ -333,11 +362,11 @@ fn check_auth(headers: &HeaderMap, token: &Option<String>) -> bool {
     let Some(got) = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
+        .and_then(extract_bearer_token)
     else {
         return false;
     };
-    constant_time_eq(got.trim(), expected)
+    constant_time_eq(got, expected)
 }
 
 async fn healthz(State(state): State<Arc<BrokerState>>) -> impl IntoResponse {

@@ -46,8 +46,8 @@ fn is_forbidden_root(raw: &str) -> bool {
 
 fn normalize_for_compare(path: &Path) -> String {
     let clean = strip_verbatim_prefix(path);
-    let mut s = clean.to_string_lossy().replace('/', r"\");
-    while s.len() > 3 && s.ends_with('\\') {
+    let mut s = clean.to_string_lossy().replace('\\', "/");
+    while s.len() > 1 && !(s.len() == 3 && s.as_bytes()[1] == b':') && s.ends_with('/') {
         s.pop();
     }
     if cfg!(windows) {
@@ -63,18 +63,18 @@ fn is_under(child: &Path, root: &Path) -> bool {
     if c == r {
         return true;
     }
-    let sep = if cfg!(windows) { '\\' } else { '/' };
-    let prefix = if r.ends_with(sep) {
+    let prefix = if r.ends_with('/') {
         r
     } else {
-        format!("{r}{sep}")
+        format!("{r}/")
     };
     c.starts_with(&prefix)
 }
 
 /// Resolves a path safely even if the leaf file or intermediate directories do not yet exist:
-/// 1. Walk up until the nearest existing ancestor is found and `canonicalize` it (blocks symlink escape).
-/// 2. Lexically normalize remaining segments (rejecting any `..` escaping above the ancestor).
+/// 1. Reject dangling symlinks (checked via `symlink_metadata` so `exists()` cannot be bypassed).
+/// 2. Walk up until the nearest existing ancestor is found and `canonicalize` it (blocks symlink escape).
+/// 3. Lexically normalize remaining segments (rejecting any `..` escaping above the ancestor).
 pub fn resolve_existing_or_new(target: &Path) -> Result<PathBuf, PathGuardError> {
     let abs = if target.is_absolute() {
         target.to_path_buf()
@@ -82,27 +82,44 @@ pub fn resolve_existing_or_new(target: &Path) -> Result<PathBuf, PathGuardError>
         std::env::current_dir()?.join(target)
     };
 
-    if abs.exists() {
+    if let Ok(meta) = fs::symlink_metadata(&abs) {
+        if meta.file_type().is_symlink() && !abs.exists() {
+            return Err(PathGuardError::OutsideAllowedRoots(
+                target.display().to_string(),
+            ));
+        }
         return Ok(strip_verbatim_prefix(&fs::canonicalize(&abs)?));
     }
 
     let mut pending: Vec<std::ffi::OsString> = Vec::new();
     let mut cursor = abs.as_path();
-    while !cursor.exists() {
-        let Some(name) = cursor.file_name() else {
-            return Err(PathGuardError::OutsideAllowedRoots(
-                target.display().to_string(),
-            ));
-        };
-        pending.push(name.to_os_string());
-        cursor = match cursor.parent() {
-            Some(p) => p,
-            None => {
-                return Err(PathGuardError::OutsideAllowedRoots(
-                    target.display().to_string(),
-                ));
+    loop {
+        match fs::symlink_metadata(cursor) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() && !cursor.exists() {
+                    return Err(PathGuardError::OutsideAllowedRoots(
+                        target.display().to_string(),
+                    ));
+                }
+                break;
             }
-        };
+            Err(_) => {
+                let Some(name) = cursor.file_name() else {
+                    return Err(PathGuardError::OutsideAllowedRoots(
+                        target.display().to_string(),
+                    ));
+                };
+                pending.push(name.to_os_string());
+                cursor = match cursor.parent() {
+                    Some(p) => p,
+                    None => {
+                        return Err(PathGuardError::OutsideAllowedRoots(
+                            target.display().to_string(),
+                        ));
+                    }
+                };
+            }
+        }
     }
 
     let mut resolved = strip_verbatim_prefix(&fs::canonicalize(cursor)?);
@@ -258,5 +275,13 @@ mod tests {
         assert!(guard.validate(&escaped.to_string_lossy()).is_err());
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn is_under_works_for_posix_and_windows_paths() {
+        assert!(is_under(Path::new("/tmp/workspace/a/b.txt"), Path::new("/tmp/workspace")));
+        assert!(!is_under(Path::new("/tmp/workspace2/a.txt"), Path::new("/tmp/workspace")));
+        assert!(is_under(Path::new(r"D:\ws\sub\file.rs"), Path::new(r"D:\ws")));
+        assert!(!is_under(Path::new(r"D:\ws2\file.rs"), Path::new(r"D:\ws")));
     }
 }
