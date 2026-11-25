@@ -1,0 +1,26 @@
+[package]
+name = "rpc-mcp-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+rand.workspace = true
+rpc-mcp-bridge = { path = "../../crates/bridge" }
+rpc-mcp-chrome-broker = { path = "../../crates/chrome-broker" }
+rpc-mcp-core = { path = "../../crates/core" }
+rpc-mcp-fs = { path = "../../crates/fs-mcp" }
+rpc-mcp-gateway = { path = "../../crates/gateway" }
+rpc-mcp-workbench = { path = "../../crates/workbench" }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = ["tray-icon"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

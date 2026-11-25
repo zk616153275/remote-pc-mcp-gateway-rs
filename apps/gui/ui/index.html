@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Remote PC MCP Gateway</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-dot"></div>
+        <div>
+          <div class="brand-name">Remote PC MCP</div>
+          <div class="brand-sub">Rust Core · v0.1</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-btn active" data-tab="dashboard" id="nav-dashboard">运行面板</button>
+        <button class="nav-btn" data-tab="wizard" id="nav-wizard">配置向导</button>
+        <button class="nav-btn" data-tab="roots" id="nav-roots">授权目录与守卫</button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <button class="lang-btn" id="btn-lang">中 / EN</button>
+        <div class="tray-hint" id="tray-hint">关闭窗口自动缩入托盘，释放 WebView2 内存</div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="status-pill" id="status-pill">
+          <span class="dot" id="status-dot"></span>
+          <span id="status-text">已停止 · 待启动</span>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" id="btn-start">启动服务</button>
+          <button class="btn btn-danger" id="btn-stop" disabled>停止服务</button>
+        </div>
+      </header>
+
+      <div class="alert hidden" id="alert-box"></div>
+
+      <!-- TAB 1: DASHBOARD -->
+      <section class="panel active" id="tab-dashboard">
+        <div class="cards">
+          <div class="card" id="card-fs">
+            <div class="card-k">FS MCP (内嵌 ripgrep)</div>
+            <div class="card-v" id="val-fs">未启动</div>
+          </div>
+          <div class="card" id="card-wb">
+            <div class="card-k">AI Workbench (Win32 Job)</div>
+            <div class="card-v" id="val-wb">未启动</div>
+          </div>
+          <div class="card" id="card-gw">
+            <div class="card-k">OAuth 2.1 Gateway</div>
+            <div class="card-v" id="val-gw">未启动</div>
+          </div>
+          <div class="card" id="card-ch">
+            <div class="card-k">Chrome Sidecar Broker</div>
+            <div class="card-v" id="val-ch">未启用</div>
+          </div>
+        </div>
+
+        <div class="section">
+          <h2 id="h-cred">连接凭据（ChatGPT &amp; Google Gemini 通用）</h2>
+          <div class="cred-row">
+            <label>MCP Server URL</label>
+            <div class="cred-box">
+              <input id="inp-mcp-url" type="password" readonly placeholder="启动后自动生成公网 HTTPS 地址">
+              <button class="btn btn-ghost" data-toggle="inp-mcp-url">显示</button>
+              <button class="btn btn-secondary" data-copy="inp-mcp-url">复制 URL</button>
+            </div>
+          </div>
+          <div class="cred-row">
+            <label>Owner Approval Key</label>
+            <div class="cred-box">
+              <input id="inp-approval-key" type="password" readonly>
+              <button class="btn btn-ghost" data-toggle="inp-approval-key">显示</button>
+              <button class="btn btn-secondary" data-copy="inp-approval-key">复制密钥</button>
+            </div>
+          </div>
+          <div class="hint" id="fakeip-hint"></div>
+        </div>
+      </section>
+
+      <!-- TAB 2: WIZARD -->
+      <section class="panel" id="tab-wizard">
+        <div class="section">
+          <h2 id="h-mode">① 公网接入模式与基本设置</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="cfg-label">实例名称（Instance Label）</label>
+              <input id="cfg-label" type="text" placeholder="My-Windows-PC">
+            </div>
+            <div class="field">
+              <label for="cfg-mode">接入模式</label>
+              <select id="cfg-mode">
+                <option value="cloudflare-quick">Cloudflare Quick Tunnel（免服务器·自动绕过 Fake-IP）</option>
+                <option value="local">仅本机模式（127.0.0.1 调试或自建 VPS 反向隧道）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-gw-mode">文件系统权限</label>
+              <select id="cfg-gw-mode">
+                <option value="readwrite">读写模式（readwrite）</option>
+                <option value="readonly">只读模式（readonly）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-gw-port">本地网关端口</label>
+              <input id="cfg-gw-port" type="number" min="1024" max="65535" value="18787">
+            </div>
+          </div>
+          <div class="save-bar">
+            <button class="btn btn-primary" id="btn-save-wizard">保存配置</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: ALLOWED ROOTS & GUARDS -->
+      <section class="panel" id="tab-roots">
+        <div class="section">
+          <h2 id="h-roots">② 授权目录白名单（allowedRoots）</h2>
+          <div class="add-root-row">
+            <input id="inp-new-root" type="text" placeholder="例如：D:\Workspace\MyProject">
+            <button class="btn btn-secondary" id="btn-add-root">+ 添加目录</button>
+          </div>
+          <ul class="root-list" id="root-list"></ul>
+        </div>
+
+        <div class="section">
+          <h2 id="h-guards">安全守卫与可选能力</h2>
+          <label class="toggle">
+            <input type="checkbox" id="chk-delete-guard" checked>
+            <span>启用危险删除二次复核守卫（拦截首次 rm -rf / Remove-Item -Recurse / git reset --hard）</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-commands" checked>
+            <span>启用 AI Workbench 命令执行与只读 Git 工具</span>
+          </label>
+          <label class="toggle">
+            <input type="checkbox" id="chk-chrome">
+            <span>启用 Chrome DevTools MCP Sidecar（需 Chrome 开启 --remote-debugging-port=9222）</span>
+          </label>
+          <div class="save-bar">
+            <button class="btn btn-primary" id="btn-save-roots">保存目录与守卫设置</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

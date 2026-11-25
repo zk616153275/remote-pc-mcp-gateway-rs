@@ -8,6 +8,7 @@ members = [
     "crates/bridge",
     "crates/chrome-broker",
     "bins/rpc-mcp",
+    "apps/gui",
 ]
 
 [workspace.package]
