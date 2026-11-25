@@ -1,0 +1,22 @@
+[package]
+name = "rpc-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rpc-mcp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+rpc-mcp-core = { path = "../../crates/core" }
+rpc-mcp-fs = { path = "../../crates/fs-mcp" }
+rpc-mcp-workbench = { path = "../../crates/workbench" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

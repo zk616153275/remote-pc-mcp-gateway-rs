@@ -1,0 +1,10 @@
+/target
+/state
+/config/config.local.json
+/config/vps-known-hosts
+/config/vm-trusted-hosts
+*.log
+*.tmp
+compare_live.mjs
+.DS_Store
+Thumbs.db

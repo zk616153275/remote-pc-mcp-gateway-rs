@@ -1,0 +1,215 @@
+use regex::Regex;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum PathGuardError {
+    #[error("path must be a non-empty string")]
+    EmptyPath,
+    #[error("at least one valid allowed root is required")]
+    NoValidRoots,
+    #[error("path not within allowed directories: {0}")]
+    OutsideAllowedRoots(String),
+    #[error("invalid path traversal segment in: {0}")]
+    InvalidTraversal(String),
+    #[error("I/O error resolving path: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// Strips Windows extended-length verbatim prefix `\\?\` when present.
+pub fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+fn is_forbidden_root(raw: &str) -> bool {
+    static DRIVE_ROOT_RE: OnceLock<Regex> = OnceLock::new();
+    static USER_HOME_RE: OnceLock<Regex> = OnceLock::new();
+
+    let trimmed = raw.trim().trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() {
+        return true;
+    }
+    let drive_re = DRIVE_ROOT_RE.get_or_init(|| Regex::new(r"(?i)^[A-Z]:$").unwrap());
+    let home_re =
+        USER_HOME_RE.get_or_init(|| Regex::new(r"(?i)^[A-Z]:[\\/]Users[\\/][^\\/]+$").unwrap());
+    drive_re.is_match(trimmed) || home_re.is_match(trimmed) || trimmed == "/"
+}
+
+fn normalize_for_compare(path: &Path) -> String {
+    let clean = strip_verbatim_prefix(path);
+    let mut s = clean.to_string_lossy().replace('/', r"\");
+    while s.len() > 3 && s.ends_with('\\') {
+        s.pop();
+    }
+    if cfg!(windows) {
+        s.to_lowercase()
+    } else {
+        s
+    }
+}
+
+fn is_under(child: &Path, root: &Path) -> bool {
+    let c = normalize_for_compare(child);
+    let r = normalize_for_compare(root);
+    if c == r {
+        return true;
+    }
+    let sep = if cfg!(windows) { '\\' } else { '/' };
+    let prefix = if r.ends_with(sep) {
+        r
+    } else {
+        format!("{r}{sep}")
+    };
+    c.starts_with(&prefix)
+}
+
+/// Resolves a path safely even if the leaf file or intermediate directories do not yet exist:
+/// 1. Walk up until the nearest existing ancestor is found and `canonicalize` it (blocks symlink escape).
+/// 2. Lexically normalize remaining segments (rejecting any `..` escaping above the ancestor).
+pub fn resolve_existing_or_new(target: &Path) -> Result<PathBuf, PathGuardError> {
+    let abs = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(target)
+    };
+
+    if abs.exists() {
+        return Ok(strip_verbatim_prefix(&fs::canonicalize(&abs)?));
+    }
+
+    let mut pending: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = abs.as_path();
+    while !cursor.exists() {
+        let Some(name) = cursor.file_name() else {
+            return Err(PathGuardError::OutsideAllowedRoots(
+                target.display().to_string(),
+            ));
+        };
+        pending.push(name.to_os_string());
+        cursor = match cursor.parent() {
+            Some(p) => p,
+            None => {
+                return Err(PathGuardError::OutsideAllowedRoots(
+                    target.display().to_string(),
+                ));
+            }
+        };
+    }
+
+    let mut resolved = strip_verbatim_prefix(&fs::canonicalize(cursor)?);
+    pending.reverse();
+    for seg in pending {
+        let seg_path = Path::new(&seg);
+        for comp in seg_path.components() {
+            match comp {
+                Component::Normal(c) => resolved.push(c),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(PathGuardError::InvalidTraversal(
+                        target.display().to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+#[derive(Debug, Clone)]
+pub struct AllowedRoots {
+    roots: Vec<PathBuf>,
+}
+
+impl AllowedRoots {
+    pub fn new<I, S>(raw_roots: I) -> Result<Self, PathGuardError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut valid = Vec::new();
+        for item in raw_roots {
+            let s = item.as_ref().trim();
+            if s.is_empty() || is_forbidden_root(s) {
+                continue;
+            }
+            let p = PathBuf::from(s);
+            if let Ok(meta) = fs::metadata(&p) {
+                if meta.is_dir() {
+                    if let Ok(canon) = fs::canonicalize(&p) {
+                        valid.push(strip_verbatim_prefix(&canon));
+                    }
+                }
+            }
+        }
+        if valid.is_empty() {
+            return Err(PathGuardError::NoValidRoots);
+        }
+        Ok(Self { roots: valid })
+    }
+
+    pub fn roots(&self) -> &[PathBuf] {
+        &self.roots
+    }
+
+    /// Validates an existing or not-yet-created path is strictly inside one of the allowed roots.
+    pub fn validate(&self, raw_target: &str) -> Result<PathBuf, PathGuardError> {
+        let trimmed = raw_target.trim();
+        if trimmed.is_empty() {
+            return Err(PathGuardError::EmptyPath);
+        }
+        // Reject raw `..` components before ancestor resolution on non-existent paths
+        let candidate = Path::new(trimmed);
+        let resolved = resolve_existing_or_new(candidate)?;
+        if self.roots.iter().any(|root| is_under(&resolved, root)) {
+            Ok(resolved)
+        } else {
+            Err(PathGuardError::OutsideAllowedRoots(trimmed.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_drive_and_user_home_roots() {
+        assert!(is_forbidden_root(r"C:\"));
+        assert!(is_forbidden_root(r"D:"));
+        assert!(is_forbidden_root(r"C:\Users\Alice"));
+        assert!(is_forbidden_root(r"C:\Users\Alice\"));
+        assert!(!is_forbidden_root(r"C:\Users\Alice\Projects"));
+    }
+
+    #[test]
+    fn validates_existing_and_new_files_and_blocks_escape() {
+        let base = std::env::temp_dir().join(format!("rmcp-pg-{}", uuid::Uuid::new_v4()));
+        let sub = base.join("workspace");
+        fs::create_dir_all(&sub).unwrap();
+
+        let guard = AllowedRoots::new([sub.to_string_lossy().to_string()]).unwrap();
+
+        // Existing dir
+        assert!(guard.validate(&sub.to_string_lossy()).is_ok());
+
+        // Not-yet-created nested file
+        let new_file = sub.join("nested").join("new.txt");
+        let checked = guard.validate(&new_file.to_string_lossy()).unwrap();
+        assert!(checked.ends_with(Path::new("nested").join("new.txt")));
+
+        // Escape via ..
+        let escaped = sub.join("..").join("outside.txt");
+        assert!(guard.validate(&escaped.to_string_lossy()).is_err());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+}
