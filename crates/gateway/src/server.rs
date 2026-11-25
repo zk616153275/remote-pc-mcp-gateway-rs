@@ -360,9 +360,32 @@ impl GatewayState {
             Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e }] }),
         };
 
+        let target_summary: String = args
+            .get("path")
+            .or_else(|| args.get("commandLine"))
+            .or_else(|| args.get("source"))
+            .or_else(|| args.get("url"))
+            .or_else(|| args.get("pattern"))
+            .and_then(Value::as_str)
+            .map(|s| {
+                let single = s.replace(['\r', '\n'], " ");
+                if single.chars().count() > 120 {
+                    format!("{}...", single.chars().take(120).collect::<String>())
+                } else {
+                    single
+                }
+            })
+            .unwrap_or_default();
+
         self.audit.record(
             "tool_call",
-            json!({ "tool": name, "lane": lane, "owner": owner }),
+            json!({
+                "tool": name,
+                "lane": lane,
+                "owner": owner,
+                "platform": platform,
+                "target": target_summary
+            }),
         );
 
         if name == "wait" {

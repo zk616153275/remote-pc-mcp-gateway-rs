@@ -34,6 +34,8 @@ pub fn start_ssh_reverse_tunnel(opts: &SshTunnelOptions) -> Result<RunningSshTun
         "-o".to_string(),
         "BatchMode=yes".to_string(),
         "-o".to_string(),
+        "StrictHostKeyChecking=accept-new".to_string(),
+        "-o".to_string(),
         "ExitOnForwardFailure=yes".to_string(),
         "-o".to_string(),
         "ServerAliveInterval=30".to_string(),

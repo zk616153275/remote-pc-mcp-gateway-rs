@@ -1,0 +1,58 @@
+{
+  "instanceLabel": "My-Windows-PC",
+  "language": "zh",
+  "connectionMode": "cloudflare-quick",
+  "gateway": {
+    "mode": "readwrite",
+    "enableCommands": true,
+    "enableChrome": true,
+    "enableContextTools": false,
+    "localPort": 18787,
+    "secret": "GENERATE_ON_FIRST_RUN",
+    "oauthSigningKey": "GENERATE_ON_FIRST_RUN",
+    "approvalKey": "GENERATE_ON_FIRST_RUN"
+  },
+  "guardsAndHooks": {
+    "enableDeleteGuard": true,
+    "enableTrayNotifications": false,
+    "notifyOnDeleteBlocked": true,
+    "notifyOnOAuthAuthorized": true,
+    "notifyOnServiceError": true,
+    "notifyOnTaskIdleComplete": false,
+    "idleCompleteSeconds": 25,
+    "notificationHookCommand": "",
+    "visionBackend": "auto",
+    "geminiApiKey": "",
+    "openaiApiKey": ""
+  },
+  "cloudflare": {
+    "mode": "quick",
+    "namedTunnelToken": "",
+    "publicHostname": ""
+  },
+  "vps": {
+    "host": "203.0.113.10",
+    "sshPort": 22,
+    "user": "root",
+    "domain": "mcp.203-0-113-10.sslip.io",
+    "sshKeyPath": "",
+    "remoteFsPort": 27618,
+    "remoteChromeMcpPort": 27619,
+    "remoteWorkbenchPort": 27623
+  },
+  "localPorts": {
+    "fsInternal": 18848,
+    "fsBearer": 18849,
+    "workbench": 18623,
+    "chromeCdp": 9222,
+    "chromeMcp": 18619,
+    "reuseExistingChromeMcp": false
+  },
+  "tokens": {
+    "fsToken": "GENERATE_ON_FIRST_RUN",
+    "workbenchToken": "GENERATE_ON_FIRST_RUN"
+  },
+  "allowedRoots": [
+    "C:\\Projects\\DemoWorkspace"
+  ]
+}

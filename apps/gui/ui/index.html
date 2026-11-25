@@ -8,9 +8,15 @@
 </head>
 <body>
   <div class="shell">
+    <!-- Left Sidebar -->
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-dot"></div>
+        <div class="brand-icon">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <rect x="3" y="4" width="18" height="12" rx="2"/>
+            <path d="M8 20h8M12 16v4"/>
+          </svg>
+        </div>
         <div>
           <div class="brand-name">Remote PC MCP</div>
           <div class="brand-sub">Rust Core · v0.1</div>
@@ -18,26 +24,60 @@
       </div>
 
       <nav class="nav">
-        <button class="nav-btn active" data-tab="dashboard" id="nav-dashboard">运行面板</button>
-        <button class="nav-btn" data-tab="wizard" id="nav-wizard">配置向导</button>
-        <button class="nav-btn" data-tab="roots" id="nav-roots">授权目录与守卫</button>
+        <button class="nav-btn active" data-tab="dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+          <span data-i18n="navDashboard">运行面板</span>
+        </button>
+        <button class="nav-btn" data-tab="activity">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span data-i18n="navActivity">AI 指挥动态</span>
+          <span class="nav-badge pulse-badge" id="activity-count-badge">0</span>
+        </button>
+        <button class="nav-btn" data-tab="wizard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span data-i18n="navWizard">接入模式</span>
+        </button>
+        <button class="nav-btn" data-tab="roots">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          <span data-i18n="navRoots">目录与守卫</span>
+          <span class="nav-badge" id="roots-count-badge">0</span>
+        </button>
+        <button class="nav-btn" data-tab="logs">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <span data-i18n="navLogs">启动终端日志</span>
+        </button>
       </nav>
 
+      <!-- Environment readiness chips -->
+      <div class="env-box">
+        <div class="env-title" data-i18n="envTitle">本机依赖自检</div>
+        <div class="env-grid">
+          <span class="env-chip" id="env-pwsh"><i></i>PWSH 7</span>
+          <span class="env-chip" id="env-cf"><i></i>Cloudflared</span>
+          <span class="env-chip" id="env-ssh"><i></i>OpenSSH</span>
+          <span class="env-chip" id="env-node"><i></i>Node</span>
+        </div>
+      </div>
+
       <div class="sidebar-foot">
-        <button class="lang-btn" id="btn-lang">中 / EN</button>
-        <div class="tray-hint" id="tray-hint">关闭窗口自动缩入托盘，释放 WebView2 内存</div>
+        <button class="lang-btn" id="btn-lang">中文 / English</button>
+        <div class="tray-hint" data-i18n="trayHint">关闭窗口自动缩入托盘，释放 WebView2 内存</div>
       </div>
     </aside>
 
+    <!-- Main Content -->
     <main class="main">
       <header class="topbar">
         <div class="status-pill" id="status-pill">
-          <span class="dot" id="status-dot"></span>
+          <span class="dot"></span>
           <span id="status-text">已停止 · 待启动</span>
         </div>
         <div class="actions">
-          <button class="btn btn-primary" id="btn-start">启动服务</button>
-          <button class="btn btn-danger" id="btn-stop" disabled>停止服务</button>
+          <span class="dirty-tag hidden" id="dirty-tag" data-i18n="unsavedChanges">有未保存修改</span>
+          <button class="btn btn-primary" id="btn-start">
+            <span id="btn-start-label" data-i18n="btnStart">启动服务</span>
+          </button>
+          <button class="btn btn-danger" id="btn-stop" disabled data-i18n="btnStop">停止服务</button>
         </div>
       </header>
 
@@ -45,131 +85,276 @@
 
       <!-- TAB 1: DASHBOARD -->
       <section class="panel active" id="tab-dashboard">
-        <div class="cards">
-          <div class="card" id="card-fs">
-            <div class="card-k">FS MCP (内嵌 ripgrep)</div>
-            <div class="card-v" id="val-fs">未启动</div>
+        <!-- 3-step readiness bar -->
+        <div class="checklist">
+          <div class="step" id="step-1">
+            <span class="step-num">1</span>
+            <span class="step-txt" data-i18n="step1">配置授权目录</span>
+            <button class="link-btn" id="btn-go-roots" data-i18n="goConfig">去添加 →</button>
           </div>
-          <div class="card" id="card-wb">
-            <div class="card-k">AI Workbench (Win32 Job)</div>
-            <div class="card-v" id="val-wb">未启动</div>
+          <div class="step-div"></div>
+          <div class="step" id="step-2">
+            <span class="step-num">2</span>
+            <span class="step-txt" data-i18n="step2">启动网关与隧道</span>
           </div>
-          <div class="card" id="card-gw">
-            <div class="card-k">OAuth 2.1 Gateway</div>
-            <div class="card-v" id="val-gw">未启动</div>
-          </div>
-          <div class="card" id="card-ch">
-            <div class="card-k">Chrome Sidecar Broker</div>
-            <div class="card-v" id="val-ch">未启用</div>
+          <div class="step-div"></div>
+          <div class="step" id="step-3">
+            <span class="step-num">3</span>
+            <span class="step-txt" data-i18n="step3">复制凭据绑定 AI</span>
           </div>
         </div>
 
+        <!-- 4 Service Health Cards -->
+        <div class="cards">
+          <div class="card" id="card-fs">
+            <div class="card-top"><span class="card-k">FS MCP</span><span class="card-dot"></span></div>
+            <div class="card-v" id="val-fs">未启动</div>
+            <div class="card-sub" data-i18n="subFs">内嵌 ripgrep · 白名单</div>
+          </div>
+          <div class="card" id="card-wb">
+            <div class="card-top"><span class="card-k">AI Workbench</span><span class="card-dot"></span></div>
+            <div class="card-v" id="val-wb">未启动</div>
+            <div class="card-sub" data-i18n="subWb">Win32 Job Object</div>
+          </div>
+          <div class="card" id="card-gw">
+            <div class="card-top"><span class="card-k">OAuth 2.1 Gateway</span><span class="card-dot"></span></div>
+            <div class="card-v" id="val-gw">未启动</div>
+            <div class="card-sub" data-i18n="subGw">PKCE + DCR 双平台</div>
+          </div>
+          <div class="card" id="card-ch">
+            <div class="card-top"><span class="card-k">Chrome Broker</span><span class="card-dot"></span></div>
+            <div class="card-v" id="val-ch">未启用</div>
+            <div class="card-sub" data-i18n="subCh">按需懒加载 Sidecar</div>
+          </div>
+        </div>
+
+        <!-- Credentials -->
         <div class="section">
-          <h2 id="h-cred">连接凭据（ChatGPT &amp; Google Gemini 通用）</h2>
+          <div class="sec-head">
+            <h2 data-i18n="credTitle">连接凭据（ChatGPT &amp; Google Gemini 通用）</h2>
+            <span class="badge-ok hidden" id="fakeip-badge">Fake-IP QUIC 直连</span>
+          </div>
           <div class="cred-row">
             <label>MCP Server URL</label>
             <div class="cred-box">
-              <input id="inp-mcp-url" type="password" readonly placeholder="启动后自动生成公网 HTTPS 地址">
-              <button class="btn btn-ghost" data-toggle="inp-mcp-url">显示</button>
-              <button class="btn btn-secondary" data-copy="inp-mcp-url">复制 URL</button>
+              <input id="inp-mcp-url" type="password" readonly placeholder="点击右上角「启动服务」后自动生成">
+              <button class="btn btn-ghost" data-toggle="inp-mcp-url" data-i18n="show">显示</button>
+              <button class="btn btn-secondary" data-copy="inp-mcp-url" data-i18n="copyUrl">复制 URL</button>
             </div>
           </div>
           <div class="cred-row">
             <label>Owner Approval Key</label>
             <div class="cred-box">
               <input id="inp-approval-key" type="password" readonly>
-              <button class="btn btn-ghost" data-toggle="inp-approval-key">显示</button>
-              <button class="btn btn-secondary" data-copy="inp-approval-key">复制密钥</button>
+              <button class="btn btn-ghost" data-toggle="inp-approval-key" data-i18n="show">显示</button>
+              <button class="btn btn-secondary" data-copy="inp-approval-key" data-i18n="copyKey">复制密钥</button>
             </div>
           </div>
-          <div class="hint" id="fakeip-hint"></div>
+        </div>
+
+        <!-- Split Live Preview: Recent AI Actions + Mini Startup Console -->
+        <div class="dash-split">
+          <div class="section mini-panel">
+            <div class="sec-head">
+              <h2 data-i18n="recentAiTitle">最近 AI 指挥操作</h2>
+              <button class="link-btn" id="btn-all-activity" data-i18n="viewAll">查看全部 →</button>
+            </div>
+            <div class="mini-feed" id="mini-activity-feed"></div>
+          </div>
+          <div class="section mini-panel">
+            <div class="sec-head">
+              <h2 data-i18n="miniLogTitle">启动与隧道终端</h2>
+              <button class="link-btn" id="btn-all-logs" data-i18n="fullTerminal">完整终端 →</button>
+            </div>
+            <div class="mini-console" id="mini-log-console"></div>
+          </div>
+        </div>
+
+        <details class="guide-box">
+          <summary data-i18n="guideSummary">如何绑定到 Google Gemini / OpenAI ChatGPT？（点击展开 3 步指引）</summary>
+          <div class="guide-body">
+            <ol>
+              <li>在 <strong>Gemini</strong>（Settings → Connected Apps → Custom apps）或 <strong>ChatGPT</strong>（Plugins → Add custom MCP server）中新建自定义应用。</li>
+              <li>粘贴上方复制的 <strong>MCP Server URL</strong>；Client ID 与 Client Secret 全部<strong>留空</strong>（本网关支持 OAuth 2.1 动态注册 DCR）。</li>
+              <li>弹出本机授权确认页时，粘贴 <strong>Owner Approval Key</strong> 点击确认，即可在对话中 <code>@</code> 调用本机工具。</li>
+            </ol>
+          </div>
+        </details>
+      </section>
+
+      <!-- TAB 2: LIVE AI ACTIVITY FEED -->
+      <section class="panel" id="tab-activity">
+        <div class="stat-strip">
+          <div class="stat-box"><span class="stat-num" id="st-total">0</span><span class="stat-lbl" data-i18n="stTotal">总操作次数</span></div>
+          <div class="stat-box st-fs"><span class="stat-num" id="st-fs">0</span><span class="stat-lbl" data-i18n="stFs">文件读写与搜索</span></div>
+          <div class="stat-box st-cmd"><span class="stat-num" id="st-cmd">0</span><span class="stat-lbl" data-i18n="stCmd">终端命令与 Git</span></div>
+          <div class="stat-box st-sec"><span class="stat-num" id="st-sec">0</span><span class="stat-lbl" data-i18n="stSec">授权与守卫拦截</span></div>
+        </div>
+
+        <div class="section">
+          <div class="sec-head">
+            <h2 data-i18n="activityHeading">Gemini / ChatGPT 实时本地操作流</h2>
+            <div class="filter-pills" id="activity-filters">
+              <button class="fpill active" data-filter="all" data-i18n="fAll">全部</button>
+              <button class="fpill" data-filter="fs" data-i18n="fFs">文件</button>
+              <button class="fpill" data-filter="cmd" data-i18n="fCmd">命令</button>
+              <button class="fpill" data-filter="chrome" data-i18n="fChrome">浏览器</button>
+              <button class="fpill" data-filter="security" data-i18n="fSec">安全</button>
+            </div>
+          </div>
+          <div class="activity-list" id="activity-list"></div>
         </div>
       </section>
 
-      <!-- TAB 2: WIZARD -->
+      <!-- TAB 3: CONNECTION MODE WIZARD -->
       <section class="panel" id="tab-wizard">
         <div class="section">
-          <h2 id="h-mode">① 公网接入模式与基本设置</h2>
-          <div class="form-grid">
+          <h2 data-i18n="modeTitle">选择公网接入方式</h2>
+          <div class="mode-cards">
+            <div class="mode-card" data-mode="cloudflare-quick">
+              <div class="mode-title">Cloudflare Quick Tunnel <span class="pill-rec" data-i18n="rec">新手推荐</span></div>
+              <div class="mode-desc" data-i18n="descQuick">免服务器、免域名、零成本；自动绕过 Clash/Mihomo Fake-IP。重启后临时地址会变化。</div>
+            </div>
+            <div class="mode-card" data-mode="cloudflare-named">
+              <div class="mode-title">Cloudflare Named Tunnel</div>
+              <div class="mode-desc" data-i18n="descNamed">免 VPS，绑定你自己的 Cloudflare 固定域名，重启后 URL 永久不变。</div>
+            </div>
+            <div class="mode-card" data-mode="vps">
+              <div class="mode-title" data-i18n="titleVps">自建 Linux VPS（SSH -R）</div>
+              <div class="mode-desc" data-i18n="descVps">通过 OpenSSH 反向隧道接入自建 Ubuntu/Debian VPS，适合长期稳定常驻。</div>
+            </div>
+            <div class="mode-card" data-mode="local">
+              <div class="mode-title" data-i18n="titleLocal">仅本机调试模式</div>
+              <div class="mode-desc" data-i18n="descLocal">仅监听 127.0.0.1，不拉起外部隧道，适合本机联调或外接自定义反代。</div>
+            </div>
+          </div>
+
+          <div class="form-grid" style="margin-top:20px;">
             <div class="field">
-              <label for="cfg-label">实例名称（Instance Label）</label>
+              <label for="cfg-label" data-i18n="lblInstance">实例名称（显示在授权页）</label>
               <input id="cfg-label" type="text" placeholder="My-Windows-PC">
             </div>
             <div class="field">
-              <label for="cfg-mode">接入模式</label>
-              <select id="cfg-mode">
-                <option value="cloudflare-quick">Cloudflare Quick Tunnel（免服务器·自动绕过 Fake-IP）</option>
-                <option value="cloudflare-named">Cloudflare Named Tunnel（固定域名）</option>
-                <option value="vps">自建 Linux VPS（SSH -R 反向隧道）</option>
-                <option value="local">仅本机模式（127.0.0.1 调试）</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="cfg-gw-mode">文件系统权限</label>
+              <label for="cfg-gw-mode" data-i18n="lblPerm">文件系统权限级别</label>
               <select id="cfg-gw-mode">
-                <option value="readwrite">读写模式（readwrite）</option>
-                <option value="readonly">只读模式（readonly）</option>
+                <option value="readwrite">读写模式（readwrite · 允许改文件与执行命令）</option>
+                <option value="readonly">只读模式（readonly · 仅允许查看与搜索）</option>
               </select>
             </div>
             <div class="field">
-              <label for="cfg-gw-port">本地网关端口</label>
+              <label for="cfg-gw-port" data-i18n="lblPort">本地网关端口</label>
               <input id="cfg-gw-port" type="number" min="1024" max="65535" value="18787">
             </div>
-            <div class="field">
-              <label for="cfg-cf-host">Cloudflare 固定域名（Named 模式）</label>
-              <input id="cfg-cf-host" type="text" placeholder="mcp.example.com">
-            </div>
-            <div class="field">
-              <label for="cfg-cf-token">Cloudflare Named Tunnel Token</label>
-              <input id="cfg-cf-token" type="password" placeholder="eyJhIjoi...">
-            </div>
-            <div class="field">
-              <label for="cfg-vps-host">VPS 主机 IP / 域名（VPS 模式）</label>
-              <input id="cfg-vps-host" type="text" placeholder="203.0.113.10">
-            </div>
-            <div class="field">
-              <label for="cfg-vps-domain">VPS 公网 HTTPS 域名</label>
-              <input id="cfg-vps-domain" type="text" placeholder="mcp.203-0-113-10.sslip.io">
+          </div>
+
+          <div class="sub-group hidden" id="group-cf-named">
+            <h3 data-i18n="cfNamedSub">Cloudflare Named Tunnel 参数</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="cfg-cf-host" data-i18n="lblCfHost">固定公网域名</label>
+                <input id="cfg-cf-host" type="text" placeholder="mcp.example.com">
+              </div>
+              <div class="field">
+                <label for="cfg-cf-token">Named Tunnel Token</label>
+                <input id="cfg-cf-token" type="password" placeholder="eyJhIjoi...">
+              </div>
             </div>
           </div>
+
+          <div class="sub-group hidden" id="group-vps">
+            <h3 data-i18n="vpsSub">Linux VPS SSH 反向隧道参数</h3>
+            <div class="form-grid">
+              <div class="field">
+                <label for="cfg-vps-host" data-i18n="lblVpsHost">VPS IP / 主机名</label>
+                <input id="cfg-vps-host" type="text" placeholder="203.0.113.10">
+              </div>
+              <div class="field">
+                <label for="cfg-vps-port">SSH 端口</label>
+                <input id="cfg-vps-port" type="number" min="1" max="65535" value="22">
+              </div>
+              <div class="field">
+                <label for="cfg-vps-user">SSH 用户名</label>
+                <input id="cfg-vps-user" type="text" placeholder="root">
+              </div>
+              <div class="field">
+                <label for="cfg-vps-domain" data-i18n="lblVpsDomain">公网 HTTPS 域名</label>
+                <input id="cfg-vps-domain" type="text" placeholder="mcp.203-0-113-10.sslip.io">
+              </div>
+              <div class="field" style="grid-column: 1 / -1;">
+                <label for="cfg-vps-key" data-i18n="lblVpsKey">SSH 私钥路径（留空使用系统默认 ~/.ssh/id_ed25519）</label>
+                <input id="cfg-vps-key" type="text" placeholder="C:\Users\you\.ssh\id_ed25519">
+              </div>
+            </div>
+          </div>
+
           <div class="save-bar">
-            <button class="btn btn-primary" id="btn-save-wizard">保存配置</button>
+            <button class="btn btn-primary" id="btn-save-wizard" data-i18n="btnSave">保存配置</button>
           </div>
         </div>
       </section>
 
-      <!-- TAB 3: ALLOWED ROOTS & GUARDS -->
+      <!-- TAB 4: ALLOWED ROOTS & GUARDS -->
       <section class="panel" id="tab-roots">
         <div class="section">
-          <h2 id="h-roots">② 授权目录白名单（allowedRoots）</h2>
+          <h2 data-i18n="rootsTitle">授权目录白名单（allowedRoots）</h2>
+          <p class="sec-desc" data-i18n="rootsDesc">AI 只能读写和搜索以下文件夹内的文件；系统会自动拒绝磁盘根目录（如 C:\）与用户主目录，防止越权。</p>
           <div class="add-root-row">
-            <input id="inp-new-root" type="text" placeholder="例如：D:\Workspace\MyProject">
-            <button class="btn btn-secondary" id="btn-add-root">+ 添加目录</button>
+            <input id="inp-new-root" type="text" placeholder="输入目录路径后回车，或点击右侧「浏览选择」">
+            <button class="btn btn-ghost" id="btn-pick-root" data-i18n="btnBrowse">浏览选择...</button>
+            <button class="btn btn-secondary" id="btn-add-root" data-i18n="btnAdd">+ 添加</button>
           </div>
           <ul class="root-list" id="root-list"></ul>
         </div>
 
         <div class="section">
-          <h2 id="h-guards">安全守卫与可选能力</h2>
-          <label class="toggle">
-            <input type="checkbox" id="chk-delete-guard" checked>
-            <span>启用危险删除二次复核守卫（拦截首次 rm -rf / Remove-Item -Recurse / git reset --hard）</span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="chk-commands" checked>
-            <span>启用 AI Workbench 命令执行与只读 Git 工具</span>
-          </label>
-          <label class="toggle">
-            <input type="checkbox" id="chk-chrome">
-            <span>启用 Chrome DevTools MCP Sidecar（需 Chrome 开启 --remote-debugging-port=9222）</span>
-          </label>
+          <h2 data-i18n="guardsTitle">安全守卫与可选能力</h2>
+          <div class="switch-row">
+            <div>
+              <div class="sw-title" data-i18n="swDgTitle">危险删除二次复核守卫（Delete Guard）</div>
+              <div class="sw-desc" data-i18n="swDgDesc">首次遇到 rm -rf、Remove-Item -Recurse、git reset --hard 自动拦截，10 分钟内原样重发才放行。</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="chk-delete-guard" checked><span></span></label>
+          </div>
+          <div class="switch-row">
+            <div>
+              <div class="sw-title" data-i18n="swCmdTitle">AI Workbench 命令工作台与只读 Git</div>
+              <div class="sw-desc" data-i18n="swCmdDesc">允许在授权目录内执行 PowerShell 7 命令（Win32 Job Object 自动清理进程树）。</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="chk-commands" checked><span></span></label>
+          </div>
+          <div class="switch-row">
+            <div>
+              <div class="sw-title" data-i18n="swChromeTitle">Chrome DevTools MCP Sidecar</div>
+              <div class="sw-desc" data-i18n="swChromeDesc">按需懒加载上游 chrome-devtools-mcp（需本机 Chrome 开启 --remote-debugging-port=9222）。</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="chk-chrome"><span></span></label>
+          </div>
           <div class="save-bar">
-            <button class="btn btn-primary" id="btn-save-roots">保存目录与守卫设置</button>
+            <button class="btn btn-primary" id="btn-save-roots" data-i18n="btnSaveRoots">保存目录与守卫设置</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 5: FULL TERMINAL LOGS -->
+      <section class="panel" id="tab-logs">
+        <div class="section">
+          <div class="sec-head">
+            <h2 data-i18n="logsTitle">启动与隧道实时终端</h2>
+            <div class="actions">
+              <button class="btn btn-ghost" id="btn-copy-logs" data-i18n="btnCopyLogs">复制日志</button>
+              <button class="btn btn-ghost" id="btn-clear-logs" data-i18n="btnClearLogs">清空</button>
+            </div>
+          </div>
+          <div class="terminal-chrome">
+            <div class="term-dots"><span></span><span></span><span></span><small>rpc-mcp-core · live stdout</small></div>
+            <div class="log-console" id="log-console"></div>
           </div>
         </div>
       </section>
     </main>
   </div>
+
+  <div class="toast hidden" id="toast"></div>
   <script src="app.js"></script>
 </body>
 </html>

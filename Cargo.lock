@@ -3375,6 +3375,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "chrono",
  "rand 0.8.8",
  "rpc-mcp-bridge",
  "rpc-mcp-chrome-broker",

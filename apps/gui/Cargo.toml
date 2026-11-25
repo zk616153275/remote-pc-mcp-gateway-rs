@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
+chrono.workspace = true
 rand.workspace = true
 rpc-mcp-bridge = { path = "../../crates/bridge" }
 rpc-mcp-chrome-broker = { path = "../../crates/chrome-broker" }
