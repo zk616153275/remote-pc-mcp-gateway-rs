@@ -385,7 +385,7 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 })
                 .collect();
             if sort_by == "size" {
-                items.sort_by(|a, b| b.2.cmp(&a.2));
+                items.sort_by_key(|a| std::cmp::Reverse(a.2));
             } else {
                 items.sort_by(|a, b| a.1.cmp(&b.1));
             }
@@ -760,12 +760,18 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 }
                 updated = updated.replacen(&old_norm, &new_norm, 1);
             }
+            let has_crlf = original.contains("\r\n");
             let diff = TextDiff::from_lines(&original.replace("\r\n", "\n"), &updated)
                 .unified_diff()
                 .header("original", "modified")
                 .to_string();
             if !dry_run {
-                if let Err(e) = fs::write(&path, updated.as_bytes()) {
+                let to_write = if has_crlf {
+                    updated.replace('\n', "\r\n")
+                } else {
+                    updated
+                };
+                if let Err(e) = fs::write(&path, to_write.as_bytes()) {
                     return ToolResult::error(e.to_string());
                 }
             }

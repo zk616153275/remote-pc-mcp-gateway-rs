@@ -11,6 +11,7 @@ use axum::routing::{get, options, post};
 use axum::{Json, Router};
 use reqwest::Client;
 use rpc_mcp_core::git_policy::validate_readonly_git_args;
+use rpc_mcp_core::path_guard::validate_workspace_path_lexical;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -60,6 +61,7 @@ pub struct GatewayServerConfig {
     pub chrome_url: String,
     pub chrome_token: String,
     pub workspace_root: String,
+    pub allowed_roots: Vec<String>,
     pub instance_label: String,
     pub oauth: OAuthConfig,
     pub audit_log: Option<PathBuf>,
@@ -459,17 +461,122 @@ impl GatewayState {
             };
         }
 
+        // Workbench inspection / stop / review tools
+        if matches!(name, "workbench_status" | "workbench_stop" | "workbench_review") {
+            let Some(task_id) = args.get("task_id").and_then(Value::as_str) else {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "task_id is required" }] });
+            };
+            let session_id = hex::encode(Sha256::digest(
+                format!("{}:{owner}:{task_id}", self.cfg.instance_label).as_bytes(),
+            ));
+            let hook = match self
+                .workbench_post(
+                    "/hook",
+                    json!({ "phase": "lookup", "agent": "mcp-gateway", "sessionId": session_id, "turnId": task_id }),
+                )
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+            };
+            let Some(ctx_id) = hook.get("contextId").and_then(Value::as_str) else {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "Unknown command for this owner" }] });
+            };
+            let status_res = match self
+                .upstream_rpc(
+                    &self.cfg.workbench_url,
+                    &self.cfg.workbench_token,
+                    "tools/call",
+                    json!({ "name": "get_task_status", "arguments": { "contextId": ctx_id, "includeReviewed": true, "includeFinished": true } }),
+                )
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+            };
+            let status_text = status_res
+                .pointer("/content/0/text")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            let status_json: Value = serde_json::from_str(status_text).unwrap_or(Value::Null);
+            let Some(task) = status_json.pointer("/tasks/0") else {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "Task not found" }] });
+            };
+            let Some(cmd) = task
+                .get("commands")
+                .and_then(Value::as_array)
+                .and_then(|arr| arr.iter().find(|c| c.get("requestId").and_then(Value::as_str) == Some(task_id)))
+            else {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "Unknown command for this owner" }] });
+            };
+
+            if name == "workbench_status" {
+                let payload = json!({
+                    "task_id": task_id,
+                    "revision": task["revision"],
+                    "reviewRequired": task["reviewRequired"],
+                    "state": cmd["state"],
+                    "processes": cmd["processes"],
+                    "ports": cmd["ports"],
+                    "settling": cmd["settling"],
+                    "stale": cmd["stale"],
+                    "exitCode": cmd["exitCode"],
+                });
+                return json!({ "content": [{ "type": "text", "text": payload.to_string() }] });
+            }
+            if name == "workbench_stop" {
+                let cid = cmd["commandId"].as_str().unwrap_or("");
+                return match self
+                    .upstream_rpc(
+                        &self.cfg.workbench_url,
+                        &self.cfg.workbench_token,
+                        "tools/call",
+                        json!({ "name": "stop_command", "arguments": { "contextId": ctx_id, "commandId": cid } }),
+                    )
+                    .await
+                {
+                    Ok(res) => res,
+                    Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+                };
+            }
+            let Some(revision) = args.get("revision").and_then(Value::as_str) else {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "revision is required" }] });
+            };
+            return match self
+                .upstream_rpc(
+                    &self.cfg.workbench_url,
+                    &self.cfg.workbench_token,
+                    "tools/call",
+                    json!({ "name": "complete_review", "arguments": { "contextId": ctx_id, "revision": revision, "keep": [] } }),
+                )
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+            };
+        }
+
         // Git read-only tools & run_command via Workbench
         if matches!(name, "git_status" | "git_diff" | "git_log" | "git_show" | "run_command") {
             if !self.cfg.enable_commands {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "Command execution is disabled" }] });
             }
-            let cwd = args
+            let raw_cwd = args
                 .get("cwd")
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
-                .unwrap_or(&self.cfg.workspace_root)
-                .to_string();
+                .unwrap_or(&self.cfg.workspace_root);
+            let roots_for_check: Vec<String> = if self.cfg.allowed_roots.is_empty() {
+                vec![self.cfg.workspace_root.clone()]
+            } else {
+                self.cfg.allowed_roots.clone()
+            };
+            let cwd = match validate_workspace_path_lexical(raw_cwd, &roots_for_check) {
+                Ok(valid) => valid,
+                Err(e) => {
+                    return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] });
+                }
+            };
             let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(60).clamp(1, 600);
 
             let cmd_line = if name == "run_command" {
@@ -494,6 +601,8 @@ impl GatewayState {
             };
 
             let task_id = Uuid::new_v4().to_string();
+            self.journal
+                .record_running(task_id.clone(), owner.to_string(), name.to_string());
             let session_id = hex::encode(Sha256::digest(
                 format!("{}:{owner}:{task_id}", self.cfg.instance_label).as_bytes(),
             ));
@@ -511,7 +620,7 @@ impl GatewayState {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "workbench hook returned no contextId" }] });
             };
 
-            return match self
+            let result = match self
                 .upstream_rpc(
                     &self.cfg.workbench_url,
                     &self.cfg.workbench_token,
@@ -532,9 +641,21 @@ impl GatewayState {
                 )
                 .await
             {
-                Ok(res) => res,
+                Ok(mut res) => {
+                    if let Some(txt) = res.pointer("/content/0/text").and_then(Value::as_str) {
+                        if let Ok(mut parsed) = serde_json::from_str::<Value>(txt) {
+                            if let Some(obj) = parsed.as_object_mut() {
+                                obj.insert("task_id".into(), json!(task_id));
+                                res["content"][0]["text"] = json!(parsed.to_string());
+                            }
+                        }
+                    }
+                    res
+                }
                 Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
             };
+            self.journal.record_finished(&task_id, result.clone());
+            return result;
         }
 
         json!({ "isError": true, "content": [{ "type": "text", "text": format!("Unknown tool: {name}") }] })
@@ -601,11 +722,19 @@ async fn oauth_authorize_post(
     let params: HashMap<String, String> = url::form_urlencoded::parse(body.as_bytes())
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
+    let client_id = params.get("client_id").cloned().unwrap_or_default();
     let lang = headers
         .get("accept-language")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    state.oauth.handle_authorize(true, params, lang)
+    let resp = state.oauth.handle_authorize(true, params, lang);
+    if resp.status() == StatusCode::FOUND {
+        state.audit.record(
+            "oauth_authorized",
+            json!({ "clientId": client_id }),
+        );
+    }
+    resp
 }
 
 async fn oauth_token(

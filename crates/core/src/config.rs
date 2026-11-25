@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -11,9 +13,62 @@ pub struct AppConfig {
     pub connection_mode: String,
     pub gateway: GatewayConfig,
     pub guards_and_hooks: GuardsAndHooksConfig,
+    pub cloudflare: CloudflareConfig,
+    pub vps: VpsConfig,
     pub local_ports: LocalPortsConfig,
     pub tokens: TokensConfig,
     pub allowed_roots: Vec<String>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CloudflareConfig {
+    pub mode: String,
+    pub named_tunnel_token: String,
+    pub public_hostname: String,
+}
+
+impl Default for CloudflareConfig {
+    fn default() -> Self {
+        Self {
+            mode: "quick".to_string(),
+            named_tunnel_token: String::new(),
+            public_hostname: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VpsConfig {
+    pub host: String,
+    pub ssh_port: u16,
+    pub user: String,
+    pub domain: String,
+    pub ssh_key_path: String,
+    pub remote_fs_port: u16,
+    pub remote_chrome_mcp_port: u16,
+    pub remote_workbench_port: u16,
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+impl Default for VpsConfig {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            ssh_port: 22,
+            user: "root".to_string(),
+            domain: String::new(),
+            ssh_key_path: String::new(),
+            remote_fs_port: 27618,
+            remote_chrome_mcp_port: 27619,
+            remote_workbench_port: 27623,
+            extra: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,5 +172,28 @@ impl AppConfig {
         let cfg: Self = serde_json::from_str(trimmed)
             .with_context(|| format!("failed to parse config JSON: {}", path.display()))?;
         Ok(cfg)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_cloudflare_vps_and_extra_fields_on_roundtrip() {
+        let raw = r#"{
+            "instanceLabel": "My-PC",
+            "connectionMode": "vps",
+            "cloudflare": { "mode": "named", "namedTunnelToken": "tok-cf", "publicHostname": "mcp.example.com" },
+            "vps": { "host": "203.0.113.10", "sshPort": 2222, "user": "root", "destRoot": "/opt/isolated" },
+            "customFlag": 42
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(cfg.cloudflare.mode, "named");
+        assert_eq!(cfg.cloudflare.named_tunnel_token, "tok-cf");
+        assert_eq!(cfg.vps.host, "203.0.113.10");
+        assert_eq!(cfg.vps.ssh_port, 2222);
+        assert_eq!(cfg.vps.extra.get("destRoot").and_then(Value::as_str), Some("/opt/isolated"));
+        assert_eq!(cfg.extra.get("customFlag").and_then(Value::as_i64), Some(42));
     }
 }

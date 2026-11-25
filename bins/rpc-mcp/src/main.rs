@@ -256,6 +256,7 @@ async fn main() -> Result<()> {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| ".".into()),
+                allowed_roots: file_cfg.allowed_roots.clone(),
                 instance_label: if file_cfg.instance_label.is_empty() {
                     "Windows-PC".into()
                 } else {
@@ -338,6 +339,7 @@ async fn main() -> Result<()> {
                     .first()
                     .cloned()
                     .unwrap_or_else(|| ".".into()),
+                allowed_roots: cfg.allowed_roots.clone(),
                 instance_label: cfg.instance_label.clone(),
                 oauth: OAuthConfig {
                     enabled: true,

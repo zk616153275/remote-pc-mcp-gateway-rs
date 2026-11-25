@@ -1,0 +1,76 @@
+use anyhow::{Context, Result};
+use std::process::Stdio;
+use tokio::process::{Child, Command};
+use tracing::info;
+
+#[derive(Debug, Clone)]
+pub struct SshTunnelOptions {
+    pub host: String,
+    pub ssh_port: u16,
+    pub user: String,
+    pub ssh_key_path: String,
+    pub forwards: Vec<(u16, u16)>, // (remote_port, local_port)
+}
+
+pub struct RunningSshTunnel {
+    pub child: Child,
+}
+
+pub fn start_ssh_reverse_tunnel(opts: &SshTunnelOptions) -> Result<RunningSshTunnel> {
+    if opts.host.trim().is_empty() {
+        anyhow::bail!("VPS host is required for SSH reverse tunnel");
+    }
+    let ssh_exe = if cfg!(windows) {
+        r"C:\Windows\System32\OpenSSH\ssh.exe"
+    } else {
+        "ssh"
+    };
+
+    let mut args = vec![
+        "-N".to_string(),
+        "-T".to_string(),
+        "-p".to_string(),
+        opts.ssh_port.to_string(),
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        "ExitOnForwardFailure=yes".to_string(),
+        "-o".to_string(),
+        "ServerAliveInterval=30".to_string(),
+        "-o".to_string(),
+        "ServerAliveCountMax=3".to_string(),
+    ];
+    if !opts.ssh_key_path.trim().is_empty() {
+        args.push("-i".to_string());
+        args.push(opts.ssh_key_path.clone());
+    }
+    for (remote, local) in &opts.forwards {
+        args.push("-R".to_string());
+        args.push(format!("127.0.0.1:{remote}:127.0.0.1:{local}"));
+    }
+    args.push(format!("{}@{}", opts.user, opts.host));
+
+    let mut cmd = Command::new(ssh_exe);
+    cmd.args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("failed to spawn SSH reverse tunnel to {}", opts.host))?;
+
+    info!(
+        "SSH reverse tunnel started -> {}@{}:{} ({} forwards)",
+        opts.user,
+        opts.host,
+        opts.ssh_port,
+        opts.forwards.len()
+    );
+    Ok(RunningSshTunnel { child })
+}

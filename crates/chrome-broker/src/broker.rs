@@ -111,10 +111,12 @@ impl Drop for WinJobGuard {
     }
 }
 
+type PendingMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+
 struct RunningSidecar {
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+    pending: PendingMap,
     #[cfg(windows)]
     _job: Option<WinJobGuard>,
 }
@@ -140,7 +142,7 @@ impl SidecarBackend {
         self.generation.load(Ordering::Relaxed)
     }
 
-    async fn ensure_started(&self) -> Result<(Arc<Mutex<ChildStdin>>, Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>)> {
+    async fn ensure_started(&self) -> Result<(Arc<Mutex<ChildStdin>>, PendingMap)> {
         let mut guard = self.inner.lock().await;
         if let Some(ref mut running) = *guard {
             if running.child.try_wait().ok().flatten().is_none() {
@@ -172,8 +174,7 @@ impl SidecarBackend {
             child.stdin.take().context("missing sidecar stdin")?,
         ));
         let stdout = child.stdout.take().context("missing sidecar stdout")?;
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingMap = Arc::new(Mutex::new(HashMap::new()));
 
         let pending_reader = Arc::clone(&pending);
         let stdin_pong = Arc::clone(&stdin);
@@ -260,7 +261,7 @@ impl SidecarBackend {
     async fn send_rpc(
         &self,
         stdin: &Arc<Mutex<ChildStdin>>,
-        pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
+        pending: &PendingMap,
         method: &str,
         params: Value,
         timeout_ms: u64,

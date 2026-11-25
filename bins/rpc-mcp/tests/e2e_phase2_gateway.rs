@@ -70,6 +70,7 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         chrome_url: String::new(),
         chrome_token: String::new(),
         workspace_root: ws.to_string_lossy().to_string(),
+        allowed_roots: vec![ws.to_string_lossy().to_string()],
         instance_label: "Test-PC".into(),
         oauth: OAuthConfig {
             enabled: true,
@@ -252,6 +253,52 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         .as_str()
         .unwrap()
         .contains("hello-from-rust-gateway"));
+
+    // Test 6 (P0-4 regression): run_command outside allowed_roots must be rejected
+    let escape_cmd: Value = client
+        .post(format!("{base}/sec123/mcp"))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "run_command",
+                "arguments": { "commandLine": "hostname", "cwd": r"C:\Windows\System32" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(escape_cmd["result"]["isError"], true);
+
+    // Test 7 (P0-2 regression): workbench_status is wired in call_tool (not "Unknown tool")
+    let wb_st: Value = client
+        .post(format!("{base}/sec123/mcp"))
+        .bearer_auth(access_token)
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "workbench_status",
+                "arguments": { "task_id": "00000000-0000-0000-0000-000000000000" }
+            }
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let wb_st_text = wb_st["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        !wb_st_text.contains("Unknown tool"),
+        "workbench_status must be handled: {wb_st_text}"
+    );
 
     let _ = fs::remove_dir_all(&tmp);
 }

@@ -88,10 +88,12 @@ fn is_command_locked(cmd_dir: &Path) -> bool {
     if !lock_path.exists() {
         return false;
     }
-    match OpenOptions::new().read(true).write(true).share_mode(0).open(&lock_path) {
-        Ok(_) => false,
-        Err(_) => true,
-    }
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(0)
+        .open(&lock_path)
+        .is_err()
 }
 
 #[cfg(not(windows))]

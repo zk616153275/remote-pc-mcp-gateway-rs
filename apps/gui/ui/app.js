@@ -51,6 +51,10 @@ function applyConfigToUi(cfg) {
   $("cfg-mode").value = cfg.connectionMode || "cloudflare-quick";
   $("cfg-gw-mode").value = cfg.gateway?.mode || "readwrite";
   $("cfg-gw-port").value = cfg.gateway?.localPort || 18787;
+  $("cfg-cf-host").value = cfg.cloudflare?.publicHostname || "";
+  $("cfg-cf-token").value = cfg.cloudflare?.namedTunnelToken || "";
+  $("cfg-vps-host").value = cfg.vps?.host || "";
+  $("cfg-vps-domain").value = cfg.vps?.domain || "";
   $("chk-delete-guard").checked = cfg.guardsAndHooks?.enableDeleteGuard !== false;
   $("chk-commands").checked = cfg.gateway?.enableCommands !== false;
   $("chk-chrome").checked = Boolean(cfg.gateway?.enableChrome);
@@ -75,6 +79,17 @@ function collectConfigFromUi() {
     guardsAndHooks: {
       ...currentConfig.guardsAndHooks,
       enableDeleteGuard: $("chk-delete-guard").checked,
+    },
+    cloudflare: {
+      ...currentConfig.cloudflare,
+      mode: $("cfg-mode").value === "cloudflare-named" ? "named" : "quick",
+      publicHostname: $("cfg-cf-host").value.trim(),
+      namedTunnelToken: $("cfg-cf-token").value.trim(),
+    },
+    vps: {
+      ...currentConfig.vps,
+      host: $("cfg-vps-host").value.trim(),
+      domain: $("cfg-vps-domain").value.trim(),
     },
   };
 }

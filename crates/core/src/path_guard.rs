@@ -177,6 +177,53 @@ impl AllowedRoots {
     }
 }
 
+/// Pure lexical Windows/cross-platform path normalization + prefix validation.
+/// Safe to run on a remote Linux VPS where Windows paths do not exist locally.
+pub fn validate_workspace_path_lexical(
+    candidate: &str,
+    allowed_roots: &[String],
+) -> Result<String, PathGuardError> {
+    let raw = candidate.trim();
+    if raw.is_empty() {
+        return Err(PathGuardError::EmptyPath);
+    }
+    fn lex_norm(p: &str) -> Result<String, PathGuardError> {
+        let unified = p.trim().replace('/', r"\");
+        let mut parts: Vec<&str> = Vec::new();
+        for seg in unified.split('\\') {
+            if seg.is_empty() || seg == "." {
+                continue;
+            }
+            if seg == ".." {
+                if parts.len() <= 1 {
+                    return Err(PathGuardError::InvalidTraversal(p.to_string()));
+                }
+                parts.pop();
+            } else {
+                parts.push(seg);
+            }
+        }
+        Ok(parts.join(r"\").to_lowercase())
+    }
+
+    let norm_cand = lex_norm(raw)?;
+    let ok = allowed_roots.iter().any(|root| {
+        if let Ok(norm_root) = lex_norm(root) {
+            if norm_root.is_empty() {
+                return false;
+            }
+            norm_cand == norm_root || norm_cand.starts_with(&format!(r"{norm_root}\"))
+        } else {
+            false
+        }
+    });
+    if ok {
+        Ok(raw.to_string())
+    } else {
+        Err(PathGuardError::OutsideAllowedRoots(raw.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

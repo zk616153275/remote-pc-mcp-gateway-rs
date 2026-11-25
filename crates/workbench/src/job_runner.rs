@@ -378,6 +378,7 @@ mod win_impl {
         // Acquire exclusive ownership lock (FileShare.None)
         let _owner_lock = match OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .share_mode(0)
