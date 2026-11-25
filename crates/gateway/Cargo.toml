@@ -1,0 +1,23 @@
+[package]
+name = "rpc-mcp-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hex.workspace = true
+hmac.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rpc-mcp-core = { path = "../core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true

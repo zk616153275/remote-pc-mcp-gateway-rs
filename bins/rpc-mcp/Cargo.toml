@@ -10,13 +10,20 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+axum.workspace = true
 clap.workspace = true
+rpc-mcp-bridge = { path = "../../crates/bridge" }
 rpc-mcp-core = { path = "../../crates/core" }
 rpc-mcp-fs = { path = "../../crates/fs-mcp" }
+rpc-mcp-gateway = { path = "../../crates/gateway" }
 rpc-mcp-workbench = { path = "../../crates/workbench" }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+url.workspace = true
