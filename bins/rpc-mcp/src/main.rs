@@ -1,10 +1,14 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use rpc_mcp_bridge::{start_cloudflare_tunnel, CloudflareOptions};
+use rpc_mcp_chrome_broker::{serve_chrome_broker, ChromeBrokerConfig};
 use rpc_mcp_core::config::AppConfig;
 use rpc_mcp_core::path_guard::AllowedRoots;
 use rpc_mcp_fs::{serve_fs_mcp, FsServerConfig};
-use rpc_mcp_gateway::{build_router as build_gateway_router, serve_gateway, GatewayServerConfig, OAuthConfig};
+use rpc_mcp_gateway::{
+    build_router as build_gateway_router, serve_gateway, GatewayServerConfig, OAuthConfig,
+    VisionConfig,
+};
 use rpc_mcp_workbench::{run_job_runner, serve_workbench, WorkbenchConfig};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -96,6 +100,18 @@ enum Commands {
         cloudflared: Option<PathBuf>,
         #[arg(long, default_value = "pwsh.exe")]
         pwsh: String,
+    },
+
+    /// Run Chrome DevTools MCP sidecar broker (wraps upstream chrome-devtools-mcp 1.14+)
+    ChromeBroker {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 18619)]
+        port: u16,
+        #[arg(long, default_value_t = 9222)]
+        cdp_port: u16,
+        #[arg(long, env = "LOCAL_CHROME_MCP_TOKEN")]
+        token: Option<String>,
     },
 
     /// Detached per-command Windows Job Object supervisor (invoked internally by workbench)
@@ -257,8 +273,27 @@ async fn main() -> Result<()> {
                     ..OAuthConfig::default()
                 },
                 audit_log: Some(audit_log),
+                task_dir: Some(PathBuf::from("state/gateway-tasks")),
+                vision: VisionConfig {
+                    mode: file_cfg.guards_and_hooks.vision_backend,
+                    gemini_api_key: file_cfg.guards_and_hooks.gemini_api_key,
+                    openai_api_key: file_cfg.guards_and_hooks.openai_api_key,
+                    ..VisionConfig::default()
+                },
             };
             serve_gateway(gw_cfg).await?;
+        }
+
+        Commands::ChromeBroker {
+            host,
+            port,
+            cdp_port,
+            token,
+        } => {
+            let mut cfg = ChromeBrokerConfig::default_npx(port, cdp_port);
+            cfg.host = host;
+            cfg.bearer_token = token.filter(|s| !s.is_empty());
+            serve_chrome_broker(cfg).await?;
         }
 
         Commands::Up {
@@ -315,6 +350,13 @@ async fn main() -> Result<()> {
                     ..OAuthConfig::default()
                 },
                 audit_log: Some(state_dir.join("logs").join("gateway-audit.jsonl")),
+                task_dir: Some(state_dir.join("gateway-tasks")),
+                vision: VisionConfig {
+                    mode: cfg.guards_and_hooks.vision_backend.clone(),
+                    gemini_api_key: cfg.guards_and_hooks.gemini_api_key.clone(),
+                    openai_api_key: cfg.guards_and_hooks.openai_api_key.clone(),
+                    ..VisionConfig::default()
+                },
             };
 
             let mcp_path = gw_cfg.mcp_path();

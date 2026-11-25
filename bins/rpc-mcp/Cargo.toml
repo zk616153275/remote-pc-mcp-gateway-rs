@@ -13,6 +13,7 @@ anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
 rpc-mcp-bridge = { path = "../../crates/bridge" }
+rpc-mcp-chrome-broker = { path = "../../crates/chrome-broker" }
 rpc-mcp-core = { path = "../../crates/core" }
 rpc-mcp-fs = { path = "../../crates/fs-mcp" }
 rpc-mcp-gateway = { path = "../../crates/gateway" }

@@ -1248,6 +1248,7 @@ dependencies = [
  "clap",
  "reqwest",
  "rpc-mcp-bridge",
+ "rpc-mcp-chrome-broker",
  "rpc-mcp-core",
  "rpc-mcp-fs",
  "rpc-mcp-gateway",
@@ -1273,6 +1274,20 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "rpc-mcp-chrome-broker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "rpc-mcp-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

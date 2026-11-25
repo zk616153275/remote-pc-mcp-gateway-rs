@@ -1,6 +1,8 @@
 use crate::audit::AuditLog;
 use crate::lanes::ServiceLanes;
 use crate::oauth::{OAuthConfig, OAuthService, Platform};
+use crate::recovery::{wait_tool_definition, TaskJournal};
+use crate::vision::{inspect_image_tool_definition, run_inspect_image, VisionConfig};
 use anyhow::Result;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -61,6 +63,8 @@ pub struct GatewayServerConfig {
     pub instance_label: String,
     pub oauth: OAuthConfig,
     pub audit_log: Option<PathBuf>,
+    pub task_dir: Option<PathBuf>,
+    pub vision: VisionConfig,
 }
 
 impl GatewayServerConfig {
@@ -93,6 +97,7 @@ struct GatewayState {
     oauth: Arc<OAuthService>,
     lanes: ServiceLanes,
     audit: AuditLog,
+    journal: TaskJournal,
     http: Client,
 }
 
@@ -329,6 +334,12 @@ impl GatewayState {
             }
         }
 
+        // 4. Recovery wait tool + optional Google Gemini inspect_image tool
+        all.push(wait_tool_definition());
+        if platform == Platform::Google && self.cfg.vision.is_enabled() {
+            all.push(inspect_image_tool_definition());
+        }
+
         if platform == Platform::Google {
             for tool in &mut all {
                 if let Some(schema) = tool.get_mut("inputSchema") {
@@ -351,6 +362,33 @@ impl GatewayState {
             "tool_call",
             json!({ "tool": name, "lane": lane, "owner": owner }),
         );
+
+        if name == "wait" {
+            let task_id = args.get("task_id").and_then(Value::as_str).unwrap_or("");
+            let wait_ms = args
+                .get("wait_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(500)
+                .clamp(100, 20_000);
+            if task_id.is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(wait_ms.min(2000))).await;
+                return json!({ "content": [{ "type": "text", "text": "{\"status\":\"ready\"}" }] });
+            }
+            if let Some(rec) = self.journal.get(task_id, owner) {
+                if let Some(res) = rec.result {
+                    return res;
+                }
+                return json!({ "content": [{ "type": "text", "text": serde_json::to_string(&rec).unwrap_or_default() }] });
+            }
+            return json!({ "isError": true, "content": [{ "type": "text", "text": format!("Unknown task_id: {task_id}") }] });
+        }
+
+        if name == "inspect_image" {
+            if platform != Platform::Google {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": "inspect_image is only exposed to Google Gemini sessions" }] });
+            }
+            return run_inspect_image(&self.http, &self.cfg.vision, &args).await;
+        }
 
         // Google Gemini image-block stripping protection
         if platform == Platform::Google && name == "fs_read_media_file" {
@@ -679,6 +717,7 @@ pub fn build_router(cfg: GatewayServerConfig) -> (Router, GatewayHandle) {
     let mcp_path = cfg.mcp_path();
     let state = Arc::new(GatewayState {
         audit: AuditLog::new(cfg.audit_log.clone()),
+        journal: TaskJournal::new(cfg.task_dir.clone()),
         lanes: ServiceLanes::default_lanes(),
         http: Client::builder()
             .redirect(reqwest::redirect::Policy::none())

@@ -6,6 +6,7 @@ members = [
     "crates/workbench",
     "crates/gateway",
     "crates/bridge",
+    "crates/chrome-broker",
     "bins/rpc-mcp",
 ]
 

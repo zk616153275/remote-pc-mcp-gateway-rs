@@ -82,6 +82,8 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
             ..OAuthConfig::default()
         },
         audit_log: Some(tmp.join("audit.jsonl")),
+        task_dir: Some(tmp.join("tasks")),
+        vision: rpc_mcp_gateway::VisionConfig::default(),
     });
     tokio::spawn(async move {
         let _ = axum::serve(gw_listener, gw_app).await;
