@@ -1,10 +1,14 @@
 # Remote PC MCP Gateway - Stop Script
-# Stops control-plane services and SSH tunnel WITHOUT killing detached `rpc-mcp job-runner` supervisors.
+# Stops control-plane services and this gateway's SSH tunnel WITHOUT killing
+# detached `rpc-mcp job-runner` supervisors or unrelated SSH tunnels on this PC.
 $ErrorActionPreference = 'SilentlyContinue'
 $repoRoot = $PSScriptRoot
 
 $ports = [System.Collections.Generic.HashSet[int]]::new()
 foreach ($p in @(18849, 18623, 18619, 18787)) { [void]$ports.Add($p) }
+
+$vpsHost = ''
+$vpsRemotePorts = [System.Collections.Generic.HashSet[int]]::new()
 $configFile = Join-Path $repoRoot 'config\config.local.json'
 if (Test-Path $configFile) {
     try {
@@ -13,6 +17,12 @@ if (Test-Path $configFile) {
         if ($cfg.localPorts.workbench) { [void]$ports.Add([int]$cfg.localPorts.workbench) }
         if ($cfg.localPorts.chromeMcp) { [void]$ports.Add([int]$cfg.localPorts.chromeMcp) }
         if ($cfg.gateway.localPort) { [void]$ports.Add([int]$cfg.gateway.localPort) }
+        if ($cfg.vps) {
+            if ($cfg.vps.host) { $vpsHost = [string]$cfg.vps.host }
+            [void]$vpsRemotePorts.Add($(if ($cfg.vps.remoteFsPort) { [int]$cfg.vps.remoteFsPort } else { 27618 }))
+            [void]$vpsRemotePorts.Add($(if ($cfg.vps.remoteChromeMcpPort) { [int]$cfg.vps.remoteChromeMcpPort } else { 27619 }))
+            [void]$vpsRemotePorts.Add($(if ($cfg.vps.remoteWorkbenchPort) { [int]$cfg.vps.remoteWorkbenchPort } else { 27623 }))
+        }
     } catch {}
 }
 $targetPids = [System.Collections.Generic.HashSet[int]]::new()
@@ -47,7 +57,7 @@ foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='rpc-mcp.exe'"))
     }
 }
 
-# Stop only verified ssh / cloudflared tunnel process
+# Stop only verified ssh / cloudflared tunnel process recorded by runtime-status.json
 if ($recordedSshPid) {
     $tunnelProc = Get-Process -Id $recordedSshPid -ErrorAction SilentlyContinue
     if ($tunnelProc -and ($tunnelProc.ProcessName -in @('ssh', 'cloudflared'))) {
@@ -55,11 +65,27 @@ if ($recordedSshPid) {
     }
 }
 
-# Also stop any orphaned ssh reverse tunnel processes
-Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" -ErrorAction SilentlyContinue | Where-Object {
-    $_.CommandLine -match '-R\s+'
-} | ForEach-Object {
-    Stop-Process -Id $_.ProcessId -Force
+# Precision fallback: stop only orphaned ssh.exe processes belonging to THIS gateway
+# (must match BOTH configured VPS host AND at least one configured remote forward port)
+if (-not [string]::IsNullOrWhiteSpace($vpsHost) -and $vpsRemotePorts.Count -gt 0) {
+    $escapedHost = "(?<![A-Za-z0-9._-])" + [regex]::Escape($vpsHost.Trim()) + "(?![A-Za-z0-9._-])"
+    $portTokens = @($vpsRemotePorts | ForEach-Object { "127.0.0.1:${_}:" })
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" -ErrorAction SilentlyContinue)) {
+        $cl = [string]$proc.CommandLine
+        if ([string]::IsNullOrWhiteSpace($cl)) { continue }
+        if ($cl -notmatch '(^|\s)-R(\s+|127\.)') { continue }
+        if ($cl -notmatch $escapedHost) { continue }
+        $matchedPort = $false
+        foreach ($tok in $portTokens) {
+            if ($cl.Contains($tok)) {
+                $matchedPort = $true
+                break
+            }
+        }
+        if ($matchedPort) {
+            Stop-Process -Id $proc.ProcessId -Force
+        }
+    }
 }
 
 # Stop any remaining listener PIDs on gateway local ports (verify not job-runner)

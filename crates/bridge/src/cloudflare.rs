@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use regex::Regex;
+use rpc_mcp_core::ChildJobGuard;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -43,6 +44,7 @@ pub struct RunningTunnel {
     pub child: Child,
     pub public_url: String,
     pub fake_ip_bypassed: bool,
+    _job: Option<ChildJobGuard>,
 }
 
 fn trycloudflare_re() -> &'static Regex {
@@ -97,6 +99,13 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
         .spawn()
         .with_context(|| format!("failed to spawn {}", opts.cloudflared_exe.display()))?;
 
+    #[cfg(windows)]
+    let job = child
+        .raw_handle()
+        .and_then(ChildJobGuard::attach_raw_handle);
+    #[cfg(not(windows))]
+    let job: Option<ChildJobGuard> = None;
+
     let stderr = child.stderr.take().context("missing cloudflared stderr")?;
     let mut lines = BufReader::new(stderr).lines();
 
@@ -116,6 +125,7 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
             child,
             public_url,
             fake_ip_bypassed: fake_ip,
+            _job: job,
         });
     }
 
@@ -135,6 +145,7 @@ pub async fn start_cloudflare_tunnel(opts: CloudflareOptions) -> Result<RunningT
                         child,
                         public_url,
                         fake_ip_bypassed: fake_ip,
+                        _job: job,
                     });
                 }
             }

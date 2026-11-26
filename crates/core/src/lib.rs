@@ -4,6 +4,9 @@ pub mod delete_guard;
 pub mod git_policy;
 pub mod instance_lock;
 pub mod path_guard;
+pub mod process_guard;
+
+pub use process_guard::ChildJobGuard;
 
 use std::fs;
 use std::io;

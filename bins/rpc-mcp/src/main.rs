@@ -470,7 +470,7 @@ async fn main() -> Result<()> {
 
             let mut public_origin = format!("http://127.0.0.1:{}", cfg.gateway.local_port);
             let mut _cf_tunnel = None;
-            let mut _ssh_tunnel = None;
+            let mut ssh_tunnel = None;
 
             if is_vps {
                 let mut forwards = vec![
@@ -498,7 +498,7 @@ async fn main() -> Result<()> {
                         .trim_end_matches('/');
                     public_origin = format!("https://{dom}");
                 }
-                _ssh_tunnel = Some(st);
+                ssh_tunnel = Some(st);
             } else if let Some(cf_exe) = cloudflared {
                 let cf_mode = if cfg.connection_mode == "cloudflare-named" {
                     "named"
@@ -571,6 +571,9 @@ async fn main() -> Result<()> {
                 _ = tokio::signal::ctrl_c() => {
                     info!("Received Ctrl+C; shutting down rpc-mcp stack...");
                 }
+            }
+            if let Some(ref mut st) = ssh_tunnel {
+                st.shutdown().await;
             }
             if let Some(ref backend) = chrome_backend {
                 backend.shutdown().await;
