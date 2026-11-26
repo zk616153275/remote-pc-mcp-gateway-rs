@@ -88,6 +88,39 @@ pub fn truncate_single_line(raw: &str, max_chars: usize) -> String {
     }
 }
 
+pub fn truncate_chars(raw: &str, max_chars: usize) -> String {
+    let trimmed = raw.trim();
+    if trimmed.chars().count() > max_chars {
+        format!("{}...", trimmed.chars().take(max_chars).collect::<String>())
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub fn full_target(args: &Value) -> String {
+    if let Some(s) = args
+        .get("commandLine")
+        .or_else(|| args.get("command"))
+        .or_else(|| args.get("path"))
+        .or_else(|| args.get("source"))
+        .or_else(|| args.get("url"))
+        .or_else(|| args.get("pattern"))
+        .or_else(|| args.get("filePath"))
+        .or_else(|| args.get("cwd"))
+        .or_else(|| args.get("commandId"))
+        .and_then(Value::as_str)
+    {
+        return truncate_chars(s, 4000);
+    }
+    if let Some(arr) = args.get("paths").and_then(Value::as_array) {
+        let joined: Vec<&str> = arr.iter().filter_map(Value::as_str).collect();
+        if !joined.is_empty() {
+            return truncate_chars(&joined.join("\n"), 4000);
+        }
+    }
+    String::new()
+}
+
 pub fn summarize_target(args: &Value) -> String {
     if let Some(s) = args
         .get("path")
@@ -133,6 +166,14 @@ mod tests {
         assert_eq!(
             summarize_target(&json!({ "command": "git status\n--short" })),
             "git status --short"
+        );
+        assert_eq!(
+            full_target(&json!({ "command": "git status\n--short" })),
+            "git status\n--short"
+        );
+        assert_eq!(
+            full_target(&json!({ "paths": ["a.rs", "b.rs"] })),
+            "a.rs\nb.rs"
         );
     }
 

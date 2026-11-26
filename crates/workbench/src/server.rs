@@ -6,7 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use rpc_mcp_core::audit::{summarize_target, AuditLog, AuditMeta};
+use rpc_mcp_core::audit::{full_target, summarize_target, AuditLog, AuditMeta};
 use rpc_mcp_core::delete_guard::{DeleteGuard, GuardDecision};
 use rpc_mcp_core::{constant_time_eq, extract_bearer_token, write_atomic_string};
 use serde::{Deserialize, Serialize};
@@ -774,13 +774,13 @@ async fn handle_mcp_or_panel(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            if matches!(name, "run_command" | "stop_command" | "complete_review") {
+            let audit_info = if matches!(name, "run_command" | "stop_command" | "complete_review") {
                 let meta = AuditMeta::from_header_values(
                     headers.get("x-mcp-platform").and_then(|v| v.to_str().ok()),
                     headers.get("x-mcp-owner").and_then(|v| v.to_str().ok()),
                     headers.get("x-mcp-tool").and_then(|v| v.to_str().ok()),
                 );
-                let tool_name = meta.tool_override.unwrap_or_else(|| {
+                let tool_name = meta.tool_override.clone().unwrap_or_else(|| {
                     if name == "run_command" {
                         args.get("name")
                             .and_then(Value::as_str)
@@ -800,6 +800,45 @@ async fn handle_mcp_or_panel(
                     "cmd"
                 };
                 let target = summarize_target(&args);
+                let full = full_target(&args);
+                let cwd = args
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let arg_cmd_id = args
+                    .get("commandId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                Some((meta, tool_name, lane, target, full, cwd, arg_cmd_id))
+            } else {
+                None
+            };
+            let call_res = state.engine.call_tool(name, &args).await;
+            if let Some((meta, tool_name, lane, target, full, cwd, arg_cmd_id)) = audit_info {
+                let (cmd_id, is_error) = match &call_res {
+                    Ok(val) => {
+                        let cid = val
+                            .get("commandId")
+                            .and_then(Value::as_str)
+                            .map(String::from)
+                            .unwrap_or(arg_cmd_id);
+                        let exit_nonzero = val
+                            .get("exitCode")
+                            .and_then(Value::as_i64)
+                            .map(|c| c != 0)
+                            .unwrap_or(false);
+                        let timed_out = val
+                            .get("timedOut")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let failed_state =
+                            val.get("state").and_then(Value::as_str) == Some("failed");
+                        (cid, exit_nonzero || timed_out || failed_state)
+                    }
+                    Err(_) => (arg_cmd_id, true),
+                };
                 state.audit.record(
                     "tool_call",
                     json!({
@@ -808,11 +847,15 @@ async fn handle_mcp_or_panel(
                         "owner": meta.owner,
                         "platform": meta.platform,
                         "target": target,
+                        "fullTarget": full,
+                        "cwd": cwd,
+                        "commandId": cmd_id,
+                        "isError": is_error,
                         "source": "local-workbench"
                     }),
                 );
             }
-            match state.engine.call_tool(name, &args).await {
+            match call_res {
                 Ok(val) => json!({
                     "jsonrpc": "2.0",
                     "id": id,

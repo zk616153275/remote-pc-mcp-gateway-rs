@@ -5,7 +5,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use rpc_mcp_core::audit::{summarize_target, AuditLog, AuditMeta};
+use rpc_mcp_core::audit::{full_target, summarize_target, AuditLog, AuditMeta};
 use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use rpc_mcp_core::path_guard::AllowedRoots;
 use serde_json::{json, Value};
@@ -136,6 +136,7 @@ async fn mcp_post(
                 .tool_override
                 .unwrap_or_else(|| format!("fs_{name}"));
             let target = summarize_target(&args);
+            let full = full_target(&args);
             state.audit.record(
                 "tool_call",
                 json!({
@@ -144,6 +145,7 @@ async fn mcp_post(
                     "owner": meta.owner,
                     "platform": meta.platform,
                     "target": target,
+                    "fullTarget": full,
                     "source": "local-fs"
                 }),
             );

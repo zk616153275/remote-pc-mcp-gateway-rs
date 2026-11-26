@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, options, post};
 use axum::{Json, Router};
 use reqwest::Client;
+use rpc_mcp_core::audit::{full_target, summarize_target};
 use rpc_mcp_core::git_policy::validate_readonly_git_args;
 use rpc_mcp_core::path_guard::validate_workspace_path_lexical;
 use serde_json::{json, Value};
@@ -430,22 +431,9 @@ impl GatewayState {
             Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e }] }),
         };
 
-        let target_summary: String = args
-            .get("path")
-            .or_else(|| args.get("commandLine"))
-            .or_else(|| args.get("source"))
-            .or_else(|| args.get("url"))
-            .or_else(|| args.get("pattern"))
-            .and_then(Value::as_str)
-            .map(|s| {
-                let single = s.replace(['\r', '\n'], " ");
-                if single.chars().count() > 120 {
-                    format!("{}...", single.chars().take(120).collect::<String>())
-                } else {
-                    single
-                }
-            })
-            .unwrap_or_default();
+        let target_summary = summarize_target(&args);
+        let full = full_target(&args);
+        let cwd = args.get("cwd").and_then(Value::as_str).unwrap_or("");
 
         self.audit.record(
             "tool_call",
@@ -454,7 +442,9 @@ impl GatewayState {
                 "lane": lane,
                 "owner": owner,
                 "platform": platform,
-                "target": target_summary
+                "target": target_summary,
+                "fullTarget": full,
+                "cwd": cwd
             }),
         );
 
