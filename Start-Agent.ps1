@@ -76,6 +76,13 @@ if ($cfg.connectionMode -eq 'vps-ssh' -or $cfg.connectionMode -eq 'vps') {
     $sshArgs += @('-N', $target)
 
     Write-Host "Starting SSH Reverse Tunnel to $target..." -ForegroundColor Cyan
+    Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -match '-R\s+' -and $_.CommandLine -match [regex]::Escape($vps.host)
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force
+    }
+    Start-Sleep -Milliseconds 500
+
     $psiSsh = [System.Diagnostics.ProcessStartInfo]::new()
     $psiSsh.FileName = 'C:\Windows\System32\OpenSSH\ssh.exe'
     $psiSsh.Arguments = ($sshArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } }) -join ' '

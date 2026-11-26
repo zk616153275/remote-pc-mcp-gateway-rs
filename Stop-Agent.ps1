@@ -55,6 +55,13 @@ if ($recordedSshPid) {
     }
 }
 
+# Also stop any orphaned ssh reverse tunnel processes
+Get-CimInstance Win32_Process -Filter "Name='ssh.exe'" -ErrorAction SilentlyContinue | Where-Object {
+    $_.CommandLine -match '-R\s+'
+} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force
+}
+
 # Stop any remaining listener PIDs on gateway local ports (verify not job-runner)
 foreach ($id in $targetPids) {
     $wmi = Get-CimInstance Win32_Process -Filter "ProcessId=$id"

@@ -23,6 +23,25 @@ pub fn start_ssh_reverse_tunnel(opts: &SshTunnelOptions) -> Result<RunningSshTun
     if opts.host.trim().is_empty() {
         anyhow::bail!("VPS host is required for SSH reverse tunnel");
     }
+
+    #[cfg(windows)]
+    {
+        let host = &opts.host;
+        let _ = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &format!(
+                    "Get-CimInstance Win32_Process -Filter \"Name='ssh.exe'\" -ErrorAction SilentlyContinue | Where-Object {{ $_.CommandLine -match '-R\\s+' -and $_.CommandLine -match [regex]::Escape('{host}') }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+                ),
+            ])
+            .output();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
     let ssh_exe = if cfg!(windows) {
         r"C:\Windows\System32\OpenSSH\ssh.exe"
     } else {
