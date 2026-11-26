@@ -9,9 +9,8 @@ use rpc_mcp_core::write_atomic_string;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use similar::TextDiff;
-use std::collections::VecDeque;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 pub const RESPONSE_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
@@ -297,10 +296,9 @@ fn read_text_with_bounds(
         return fs::read_to_string(path).map_err(|e| ToolResult::error(e.to_string()));
     }
 
-    let file = File::open(path).map_err(|e| ToolResult::error(e.to_string()))?;
-    let reader = BufReader::new(file);
-
     if let Some(n) = head {
+        let file = File::open(path).map_err(|e| ToolResult::error(e.to_string()))?;
+        let reader = BufReader::new(file);
         let mut out = Vec::new();
         let mut bytes = 0usize;
         for line_res in reader.lines().take(n) {
@@ -318,25 +316,64 @@ fn read_text_with_bounds(
         if n == 0 {
             return Ok(String::new());
         }
-        let mut ring: VecDeque<String> = VecDeque::with_capacity(n.min(4096));
-        let mut ring_bytes = 0usize;
-        for line_res in reader.lines() {
-            let line = line_res.map_err(|e| ToolResult::error(e.to_string()))?;
-            if ring.len() == n {
-                if let Some(evicted) = ring.pop_front() {
-                    ring_bytes = ring_bytes.saturating_sub(evicted.len() + 1);
+        // Reverse-seek from EOF in 64 KiB chunks so tail is O(tail_bytes) and
+        // never false-positives on large lines earlier in the file.
+        let mut file = File::open(path).map_err(|e| ToolResult::error(e.to_string()))?;
+        let file_len = meta.len();
+        if file_len == 0 {
+            return Ok(String::new());
+        }
+        const CHUNK: u64 = 64 * 1024;
+        let mut pos = file_len;
+        let mut collected: Vec<u8> = Vec::new();
+        let mut newlines = 0usize;
+        // Ignore a single trailing '\n' at EOF when counting lines
+        let mut skipped_eof_nl = false;
+
+        while pos > 0 {
+            let read_len = pos.min(CHUNK);
+            pos -= read_len;
+            file.seek(SeekFrom::Start(pos))
+                .map_err(|e| ToolResult::error(e.to_string()))?;
+            let mut chunk = vec![0u8; read_len as usize];
+            file.read_exact(&mut chunk)
+                .map_err(|e| ToolResult::error(e.to_string()))?;
+
+            for (idx, &b) in chunk.iter().enumerate().rev() {
+                if b == b'\n' {
+                    if !skipped_eof_nl && collected.is_empty() && idx + 1 == chunk.len() {
+                        skipped_eof_nl = true;
+                        continue;
+                    }
+                    newlines += 1;
+                    if newlines >= n {
+                        let start = idx + 1;
+                        let mut final_bytes = Vec::with_capacity((chunk.len() - start) + collected.len());
+                        final_bytes.extend_from_slice(&chunk[start..]);
+                        final_bytes.extend_from_slice(&collected);
+                        if final_bytes.len() as u64 > RESPONSE_LIMIT_BYTES {
+                            return Err(ToolResult::oversized());
+                        }
+                        let text = String::from_utf8(final_bytes)
+                            .map_err(|e| ToolResult::error(e.to_string()))?;
+                        let trimmed = text.strip_suffix('\n').unwrap_or(&text);
+                        let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+                        return Ok(trimmed.replace("\r\n", "\n"));
+                    }
                 }
             }
-            ring_bytes = ring_bytes.saturating_add(line.len() + 1);
-            if ring_bytes as u64 > RESPONSE_LIMIT_BYTES * 2 {
+
+            if (chunk.len() + collected.len()) as u64 > RESPONSE_LIMIT_BYTES {
                 return Err(ToolResult::oversized());
             }
-            ring.push_back(line);
+            chunk.extend_from_slice(&collected);
+            collected = chunk;
         }
-        if ring_bytes as u64 > RESPONSE_LIMIT_BYTES {
-            return Err(ToolResult::oversized());
-        }
-        return Ok(ring.into_iter().collect::<Vec<_>>().join("\n"));
+
+        let text = String::from_utf8(collected).map_err(|e| ToolResult::error(e.to_string()))?;
+        let trimmed = text.strip_suffix('\n').unwrap_or(&text);
+        let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+        return Ok(trimmed.replace("\r\n", "\n"));
     }
 
     Ok(String::new())
@@ -978,6 +1015,15 @@ mod tests {
         assert!(gtxt.contains("1-alpha"), "missing before-context: {gtxt}");
         assert!(gtxt.contains("2:beta-rust-mcp"), "missing match: {gtxt}");
         assert!(gtxt.contains("3-gamma"), "missing after-context: {gtxt}");
+
+        let tail_res = call_tool(
+            &roots,
+            "read_file",
+            json!({ "path": target.to_string_lossy(), "tail": 2 }),
+        )
+        .await;
+        assert!(tail_res.is_error.is_none());
+        assert_eq!(tail_res.content[0]["text"].as_str().unwrap(), "beta-rust-mcp\ngamma");
 
         let escape = call_tool(
             &roots,

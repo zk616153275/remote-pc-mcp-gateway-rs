@@ -45,11 +45,13 @@ try {
 
 # 3. If in VPS-SSH mode, launch SSH reverse tunnel
 $sshPid = $null
+$tunnelDetail = ''
 if ($cfg.connectionMode -eq 'vps-ssh' -or $cfg.connectionMode -eq 'vps') {
     $vps = $cfg.vps
     $sshUser = if ($vps.user) { [string]$vps.user } else { 'root' }
     $target = "{0}@{1}" -f $sshUser, $vps.host
     $sshPort = if ($vps.sshPort) { [int]$vps.sshPort } else { 22 }
+    $tunnelDetail = "ssh $sshUser@$($vps.host):$sshPort"
     $pem = [string]$vps.sshKeyPath
     $knownHosts = Join-Path (Split-Path -Parent $configPath) 'vps-known-hosts'
 
@@ -107,7 +109,7 @@ $runtime = @{
     services = @{
         fsMcp = @{ ok = $true; port = $fsPort; pid = $agentProc.Id }
         workbench = @{ ok = $true; port = $wbPort; pid = $agentProc.Id }
-        tunnel = @{ ok = ($sshPid -ne $null); detail = "ssh $sshUser@$($cfg.vps.host):$sshPort"; pid = $sshPid }
+        tunnel = @{ ok = ($sshPid -ne $null); detail = $tunnelDetail; pid = $sshPid }
     }
 }
 $runtimeJson = $runtime | ConvertTo-Json -Depth 5

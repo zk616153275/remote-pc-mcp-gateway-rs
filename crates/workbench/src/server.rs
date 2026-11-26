@@ -397,15 +397,17 @@ impl WorkbenchEngine {
                             }
                         }
                     } else if n > 0 && n == to_read && rel_offset + (n as u64) < file_len {
-                        // Single JSONL record exceeds max_bytes: scan forward to the next newline
-                        // (capped at 2 MiB) so rel_offset always advances and callers never stall.
-                        let mut full = buf[..n].to_vec();
-                        let mut reader = BufReader::new(&mut f);
+                        // Single JSONL record exceeds max_bytes: scan forward (bounded at 2 MiB)
+                        // until the terminating newline so rel_offset advances without OOM or mid-line corruption.
+                        const MAX_SINGLE_LINE: u64 = 2 * 1024 * 1024;
+                        let remain_budget = MAX_SINGLE_LINE.saturating_sub(n as u64);
+                        let mut reader = BufReader::new((&mut f).take(remain_budget));
                         let mut tail = Vec::new();
                         let extra = reader.read_until(b'\n', &mut tail).unwrap_or(0);
-                        let advance = (n + extra) as u64;
-                        rel_offset += advance;
-                        if full.len() + extra <= 2 * 1024 * 1024 {
+                        if tail.ends_with(b"\n") {
+                            rel_offset += (n + extra) as u64;
+                            let mut full = Vec::with_capacity(n + extra);
+                            full.extend_from_slice(&buf[..n]);
                             full.extend_from_slice(&tail[..extra]);
                             let line = String::from_utf8_lossy(&full);
                             if let Ok(val) = serde_json::from_str::<Value>(line.trim()) {
@@ -416,9 +418,12 @@ impl WorkbenchEngine {
                                     }
                                 }
                             }
-                        } else {
+                        } else if extra as u64 >= remain_budget {
+                            // Pathologically huge line (> 2 MiB): skip past it safely and mark truncated
+                            rel_offset += (n + extra) as u64;
                             truncated = true;
                         }
+                        // Otherwise: incomplete line still being flushed by writer; keep rel_offset unchanged.
                     }
                     next_offset = log_base.saturating_add(rel_offset);
                     has_more = rel_offset < file_len;

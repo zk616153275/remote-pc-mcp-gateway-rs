@@ -106,8 +106,9 @@ pub struct AuthIdentity {
 const MAX_REGISTERED_CLIENTS: usize = 128;
 const AUTH_FAIL_WINDOW_SEC: u64 = 300;
 const AUTH_MAX_FAILURES: usize = 10;
+const AUTH_MAX_TRACKED_CLIENTS: usize = 128;
 const DCR_WINDOW_SEC: u64 = 300;
-const DCR_MAX_REGISTRATIONS: usize = 30;
+const DCR_MAX_REGISTRATIONS: usize = 15;
 
 pub struct OAuthService {
     cfg: OAuthConfig,
@@ -651,11 +652,11 @@ impl OAuthService {
                 list.retain(|&ts| now.saturating_sub(ts) < AUTH_FAIL_WINDOW_SEC);
                 !list.is_empty()
             });
-            if fails_map
+            let is_locked = fails_map
                 .get(&client_id)
                 .map(|list| list.len() >= AUTH_MAX_FAILURES)
-                .unwrap_or(false)
-            {
+                .unwrap_or_else(|| fails_map.len() >= AUTH_MAX_TRACKED_CLIENTS);
+            if is_locked {
                 return err_resp(
                     StatusCode::TOO_MANY_REQUESTS,
                     "access_denied",
@@ -671,7 +672,7 @@ impl OAuthService {
         if !constant_time_eq(submitted, &self.cfg.approval_key) {
             {
                 let mut fails_map = self.failed_approvals.lock().unwrap();
-                if fails_map.len() < 128 || fails_map.contains_key(&client_id) {
+                if fails_map.len() < AUTH_MAX_TRACKED_CLIENTS || fails_map.contains_key(&client_id) {
                     fails_map.entry(client_id.clone()).or_default().push(now);
                 }
             }

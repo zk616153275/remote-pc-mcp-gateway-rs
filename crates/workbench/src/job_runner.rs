@@ -653,7 +653,7 @@ mod win_impl {
             ports: Vec<u16>,
         }
         let elapsed = Instant::now();
-        let mut last_status_save = Instant::now() - Duration::from_secs(10);
+        let mut last_status_save: Option<Instant> = None;
         let mut last_sig: Option<StatusSig> = None;
         let mut stopped = false;
         let mut timed_out = false;
@@ -721,7 +721,9 @@ mod win_impl {
             };
             let should_save = finished
                 || last_sig.as_ref() != Some(&sig)
-                || last_status_save.elapsed() >= Duration::from_secs(2);
+                || last_status_save
+                    .map(|t| t.elapsed() >= Duration::from_secs(2))
+                    .unwrap_or(true);
 
             if should_save {
                 let status = CommandStatus {
@@ -742,7 +744,7 @@ mod win_impl {
                 };
                 let saved = save_status(&dir, &status);
                 if saved {
-                    last_status_save = Instant::now();
+                    last_status_save = Some(Instant::now());
                     last_sig = Some(sig);
                 }
                 if finished && saved {

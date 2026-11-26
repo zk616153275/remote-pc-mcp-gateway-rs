@@ -48,15 +48,36 @@ fn is_unsafe_git_path_arg(arg: &str) -> bool {
         return false;
     }
     // Check value portion if this is a `--flag=value` option
-    let candidate = trimmed
-        .split_once('=')
-        .map(|(_, v)| v.trim())
-        .unwrap_or(trimmed);
+    let (flag_opt, candidate) = match trimmed.split_once('=') {
+        Some((k, v)) if k.starts_with('-') => (
+            Some(k.trim_start_matches('-').to_ascii_lowercase()),
+            v.trim(),
+        ),
+        _ => (None, trimmed),
+    };
+    let is_text_flag = matches!(
+        flag_opt.as_deref(),
+        Some(
+            "grep"
+                | "format"
+                | "pretty"
+                | "author"
+                | "committer"
+                | "since"
+                | "until"
+                | "after"
+                | "before"
+                | "date"
+        )
+    );
     let bytes = candidate.as_bytes();
     // Windows drive path (e.g. C:\... or C:/...) or UNC path (\\server\...)
-    if (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+    if (bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/'))
         || candidate.starts_with(r"\\")
-        || candidate.starts_with('/')
+        || (!is_text_flag && candidate.starts_with('/'))
     {
         return true;
     }
@@ -106,6 +127,7 @@ mod tests {
     #[test]
     fn allows_readonly_and_blocks_mutating_or_metachar_git_args() {
         assert!(validate_readonly_git_args(&["-n".into(), "10".into(), "--oneline".into()]).is_ok());
+        assert!(validate_readonly_git_args(&["--grep=/api/v1".into(), "--format=%H/%s".into()]).is_ok());
         assert!(validate_readonly_git_args(&["HEAD~3..HEAD".into(), "--".into(), "src/main.rs".into()]).is_ok());
         assert_eq!(
             validate_readonly_git_args(&["reset".into(), "--hard".into()]),

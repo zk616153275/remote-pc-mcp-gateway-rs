@@ -309,7 +309,8 @@ function activityHtml(item) {
 
 function renderActivities(items, stats) {
   lastActivities = items || [];
-  const sig = `${isZh}:${activeFilter}:${stats?.total || 0}:${lastActivities.length}:${lastActivities[0]?.time || ""}:${lastActivities[0]?.tool || ""}:${lastActivities[0]?.target || ""}`;
+  const tailItem = lastActivities[lastActivities.length - 1];
+  const sig = `${isZh}:${activeFilter}:${stats?.total || 0}:${stats?.fsCount || 0}:${stats?.cmdCount || 0}:${stats?.securityCount || 0}:${lastActivities.length}:${lastActivities[0]?.time || ""}:${lastActivities[0]?.tool || ""}:${lastActivities[0]?.target || ""}:${tailItem?.time || ""}`;
   if (sig === lastActivitySignature) {
     return;
   }
