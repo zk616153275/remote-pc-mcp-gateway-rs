@@ -1,0 +1,5 @@
+[alias]
+xtask = "run --package xtask --"
+build-gui = "run --package xtask -- build-gui"
+build-agent = "run --package xtask -- build-agent"
+build-all = "run --package xtask -- build-all"

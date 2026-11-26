@@ -9,6 +9,17 @@ members = [
     "crates/chrome-broker",
     "bins/rpc-mcp",
     "apps/gui",
+    "xtask",
+]
+default-members = [
+    "crates/core",
+    "crates/fs-mcp",
+    "crates/workbench",
+    "crates/gateway",
+    "crates/bridge",
+    "crates/chrome-broker",
+    "bins/rpc-mcp",
+    "apps/gui",
 ]
 
 [workspace.package]

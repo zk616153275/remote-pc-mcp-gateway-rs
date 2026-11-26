@@ -46,8 +46,11 @@ if (Test-Path $statusFile) {
     } catch {}
 }
 
-# Only stop rpc-mcp control-plane processes (agent/gateway/up/chrome-broker), NEVER `job-runner`
-foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='rpc-mcp.exe'")) {
+# Only stop rpc-mcp control-plane processes (agent/gateway/up/chrome-broker), NEVER `job-runner` or `rpc-mcp-gui`
+foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name LIKE 'rpc-mcp%.exe'")) {
+    if ($proc.Name -like 'rpc-mcp-gui*') {
+        continue
+    }
     $cmd = [string]$proc.CommandLine
     if ($cmd -match '\bjob-runner\b') {
         continue
@@ -94,7 +97,7 @@ foreach ($id in $targetPids) {
     if ($wmi -and ([string]$wmi.CommandLine -match '\bjob-runner\b')) {
         continue
     }
-    if ($wmi -and ($wmi.Name -in @('rpc-mcp.exe', 'node.exe', 'ssh.exe', 'cloudflared.exe'))) {
+    if ($wmi -and (($wmi.Name -like 'rpc-mcp*.exe' -and $wmi.Name -notlike 'rpc-mcp-gui*') -or ($wmi.Name -in @('node.exe', 'ssh.exe', 'cloudflared.exe')))) {
         Stop-Process -Id $id -Force
     }
 }
