@@ -13,6 +13,7 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 rpc-mcp-bridge = { path = "../../crates/bridge" }
 rpc-mcp-chrome-broker = { path = "../../crates/chrome-broker" }
 rpc-mcp-core = { path = "../../crates/core" }
@@ -25,3 +26,9 @@ tauri = { version = "2", features = ["tray-icon"] }
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

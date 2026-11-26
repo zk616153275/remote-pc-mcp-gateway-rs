@@ -1,6 +1,8 @@
+pub mod audit;
 pub mod config;
 pub mod delete_guard;
 pub mod git_policy;
+pub mod instance_lock;
 pub mod path_guard;
 
 use std::fs;

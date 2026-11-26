@@ -25,6 +25,14 @@ const I18N = {
     btnStop: "停止服务",
     statusStopped: "已停止 · 待启动",
     statusRunning: "运行中 · 网关已就绪",
+    statusRunningAttached: "运行中 · 已接入后台",
+    modePillPrefix: "接入",
+    attachedBadge: "已接入后台服务",
+    modeQuickShort: "Cloudflare Quick",
+    modeNamedShort: "Cloudflare Named",
+    modeVpsShort: "VPS · SSH -R",
+    modeLocalShort: "仅本机调试",
+    remoteVpsOk: "VPS 远端运行",
     step1: "配置授权目录",
     step2: "启动网关与隧道",
     step3: "复制凭据绑定 AI",
@@ -113,6 +121,14 @@ const I18N = {
     btnStop: "Stop",
     statusStopped: "Stopped · Idle",
     statusRunning: "Running · Ready",
+    statusRunningAttached: "Running · Attached",
+    modePillPrefix: "Mode",
+    attachedBadge: "Attached to Background",
+    modeQuickShort: "Cloudflare Quick",
+    modeNamedShort: "Cloudflare Named",
+    modeVpsShort: "VPS · SSH -R",
+    modeLocalShort: "Localhost Only",
+    remoteVpsOk: "Remote on VPS",
     step1: "Add Allowed Folder",
     step2: "Start Gateway & Tunnel",
     step3: "Copy Credentials to AI",
@@ -411,10 +427,40 @@ function collectConfigFromUi() {
   };
 }
 
+function formatModeLabel(mode) {
+  switch (mode) {
+    case "vps":
+    case "vps-ssh":
+      return t("modeVpsShort");
+    case "cloudflare-named":
+      return t("modeNamedShort");
+    case "local":
+      return t("modeLocalShort");
+    default:
+      return t("modeQuickShort");
+  }
+}
+
 function applyStatus(st) {
+  const isExternal = st.running && st.managedBy === "external";
   const pill = $("status-pill");
   pill.classList.toggle("running", st.running);
-  $("status-text").textContent = st.running ? t("statusRunning") : t("statusStopped");
+  $("status-text").textContent = st.running
+    ? isExternal
+      ? t("statusRunningAttached")
+      : t("statusRunning")
+    : t("statusStopped");
+
+  const activeMode = st.connectionMode || currentConfig?.connectionMode || "cloudflare-quick";
+  const modePill = $("mode-pill");
+  modePill.classList.toggle("active", st.running);
+  $("mode-pill-text").textContent = formatModeLabel(activeMode);
+  modePill.title = st.tunnelDetail
+    ? `${formatModeLabel(activeMode)} (${st.tunnelDetail})`
+    : formatModeLabel(activeMode);
+
+  $("attach-pill").classList.toggle("hidden", !isExternal);
+
   if (!isStarting) {
     $("btn-start").disabled = st.running;
     $("btn-start-label").textContent = t("btnStart");
@@ -424,13 +470,18 @@ function applyStatus(st) {
   $("step-2").classList.toggle("done", st.running);
   $("step-3").classList.toggle("done", st.running && Boolean(st.mcpUrl));
 
-  const setCard = (cardId, valId, ok, offLabel) => {
+  const setCard = (cardId, valId, ok, offLabel, okLabel) => {
     $(cardId).classList.toggle("ok", ok);
-    $(valId).textContent = ok ? t("healthy") : offLabel;
+    $(valId).textContent = ok ? (okLabel || t("healthy")) : offLabel;
   };
+  const isVps = activeMode === "vps" || activeMode === "vps-ssh";
   setCard("card-fs", "val-fs", st.fsOk, t("stopped"));
   setCard("card-wb", "val-wb", st.workbenchOk, t("stopped"));
-  setCard("card-gw", "val-gw", st.gatewayOk, t("stopped"));
+  if (st.running && isVps && !st.gatewayOk) {
+    setCard("card-gw", "val-gw", true, t("stopped"), t("remoteVpsOk"));
+  } else {
+    setCard("card-gw", "val-gw", st.gatewayOk, t("stopped"));
+  }
   setCard("card-ch", "val-ch", st.chromeOk, t("disabled"));
 
   $("inp-mcp-url").value = st.mcpUrl || "";
@@ -455,6 +506,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
   btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 });
 $("btn-go-roots").addEventListener("click", () => switchTab("roots"));
+$("mode-pill").addEventListener("click", () => switchTab("wizard"));
 $("btn-all-activity").addEventListener("click", () => switchTab("activity"));
 $("btn-all-logs").addEventListener("click", () => switchTab("logs"));
 

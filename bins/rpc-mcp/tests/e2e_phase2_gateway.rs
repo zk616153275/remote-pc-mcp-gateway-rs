@@ -29,6 +29,7 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         port: fs_port,
         bearer_token: "fs-secret".into(),
         allowed_roots: AllowedRoots::new([ws.to_string_lossy().to_string()]).unwrap(),
+        audit_log: None,
     });
     tokio::spawn(async move {
         let _ = axum::serve(fs_listener, fs_app).await;
@@ -46,6 +47,7 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
             state_root: tmp.join("wb"),
             pwsh_path: "pwsh.exe".into(),
             enable_delete_guard: true,
+            audit_log: None,
         },
         wb_engine,
     );

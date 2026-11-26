@@ -5,10 +5,12 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use rpc_mcp_core::audit::{summarize_target, AuditLog, AuditMeta};
 use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use rpc_mcp_core::path_guard::AllowedRoots;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -20,10 +22,12 @@ pub struct FsServerConfig {
     pub port: u16,
     pub bearer_token: String,
     pub allowed_roots: AllowedRoots,
+    pub audit_log: Option<PathBuf>,
 }
 
 struct FsState {
     cfg: FsServerConfig,
+    audit: AuditLog,
 }
 
 fn check_auth(headers: &HeaderMap, expected_token: &str) -> bool {
@@ -123,6 +127,26 @@ async fn mcp_post(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            let meta = AuditMeta::from_header_values(
+                headers.get("x-mcp-platform").and_then(|v| v.to_str().ok()),
+                headers.get("x-mcp-owner").and_then(|v| v.to_str().ok()),
+                headers.get("x-mcp-tool").and_then(|v| v.to_str().ok()),
+            );
+            let tool_name = meta
+                .tool_override
+                .unwrap_or_else(|| format!("fs_{name}"));
+            let target = summarize_target(&args);
+            state.audit.record(
+                "tool_call",
+                json!({
+                    "tool": tool_name,
+                    "lane": "fs",
+                    "owner": meta.owner,
+                    "platform": meta.platform,
+                    "target": target,
+                    "source": "local-fs"
+                }),
+            );
             let result = call_tool(&state.cfg.allowed_roots, name, args).await;
             json!({
                 "jsonrpc": "2.0",
@@ -147,7 +171,8 @@ async fn mcp_post(
 }
 
 pub fn build_router(cfg: FsServerConfig) -> Router {
-    let state = Arc::new(FsState { cfg });
+    let audit = AuditLog::new(cfg.audit_log.clone());
+    let state = Arc::new(FsState { cfg, audit });
     Router::new()
         .route("/healthz", get(healthz))
         .route("/mcp", post(mcp_post).delete(mcp_delete))

@@ -206,8 +206,29 @@ fn command_tools() -> Vec<Value> {
     ]
 }
 
+#[derive(Clone, Copy)]
+struct UpstreamMeta<'a> {
+    platform: &'a str,
+    owner: &'a str,
+    tool: &'a str,
+}
+
+fn platform_tag(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Google => "google",
+        Platform::OpenAi => "openai",
+    }
+}
+
 impl GatewayState {
-    async fn upstream_rpc(&self, url: &str, token: &str, method: &str, params: Value) -> Result<Value> {
+    async fn upstream_rpc(
+        &self,
+        url: &str,
+        token: &str,
+        method: &str,
+        params: Value,
+        meta: Option<UpstreamMeta<'_>>,
+    ) -> Result<Value> {
         let mut req = self
             .http
             .post(url)
@@ -221,6 +242,17 @@ impl GatewayState {
             }));
         if !token.is_empty() {
             req = req.header("authorization", format!("Bearer {token}"));
+        }
+        if let Some(m) = meta {
+            if !m.platform.is_empty() {
+                req = req.header("x-mcp-platform", m.platform);
+            }
+            if !m.owner.is_empty() {
+                req = req.header("x-mcp-owner", m.owner);
+            }
+            if !m.tool.is_empty() {
+                req = req.header("x-mcp-tool", m.tool);
+            }
         }
         let resp = req.send().await?;
         let status = resp.status();
@@ -281,7 +313,7 @@ impl GatewayState {
 
         // 1. Upstream FS tools
         match self
-            .upstream_rpc(&self.cfg.fs_url, &self.cfg.fs_token, "tools/list", json!({}))
+            .upstream_rpc(&self.cfg.fs_url, &self.cfg.fs_token, "tools/list", json!({}), None)
             .await
         {
             Ok(res) => {
@@ -330,6 +362,7 @@ impl GatewayState {
                     &self.cfg.chrome_token,
                     "tools/list",
                     json!({}),
+                    None,
                 )
                 .await
             {
@@ -465,6 +498,7 @@ impl GatewayState {
                                     &self.cfg.workbench_token,
                                     "tools/call",
                                     json!({ "name": "get_task_status", "arguments": { "contextId": ctx_id } }),
+                                    None,
                                 )
                                 .await
                             {
@@ -496,6 +530,7 @@ impl GatewayState {
                                                     &self.cfg.workbench_token,
                                                     "tools/call",
                                                     json!({ "name": "get_command_output", "arguments": { "commandId": cid, "offset": 0, "maxBytes": 65536 } }),
+                                                    None,
                                                 )
                                                 .await
                                                 .ok()
@@ -579,6 +614,11 @@ impl GatewayState {
                     &self.cfg.fs_token,
                     "tools/call",
                     json!({ "name": fs_tool, "arguments": args }),
+                    Some(UpstreamMeta {
+                        platform: platform_tag(platform),
+                        owner,
+                        tool: name,
+                    }),
                 )
                 .await
             {
@@ -613,6 +653,11 @@ impl GatewayState {
                     &self.cfg.chrome_token,
                     "tools/call",
                     json!({ "name": chrome_tool, "arguments": args }),
+                    Some(UpstreamMeta {
+                        platform: platform_tag(platform),
+                        owner,
+                        tool: name,
+                    }),
                 )
                 .await
             {
@@ -655,6 +700,7 @@ impl GatewayState {
                     &self.cfg.workbench_token,
                     "tools/call",
                     json!({ "name": "get_task_status", "arguments": { "contextId": ctx_id, "includeReviewed": true, "includeFinished": true } }),
+                    None,
                 )
                 .await
             {
@@ -699,6 +745,11 @@ impl GatewayState {
                         &self.cfg.workbench_token,
                         "tools/call",
                         json!({ "name": "stop_command", "arguments": { "contextId": ctx_id, "commandId": cid } }),
+                        Some(UpstreamMeta {
+                            platform: platform_tag(platform),
+                            owner,
+                            tool: name,
+                        }),
                     )
                     .await
                 {
@@ -715,6 +766,11 @@ impl GatewayState {
                     &self.cfg.workbench_token,
                     "tools/call",
                     json!({ "name": "complete_review", "arguments": { "contextId": ctx_id, "revision": revision, "keep": [] } }),
+                    Some(UpstreamMeta {
+                        platform: platform_tag(platform),
+                        owner,
+                        tool: name,
+                    }),
                 )
                 .await
             {
@@ -808,6 +864,11 @@ impl GatewayState {
                             "timeoutSeconds": timeout,
                             "waitMs": (timeout * 1000).min(15_000)
                         }
+                    }),
+                    Some(UpstreamMeta {
+                        platform: platform_tag(platform),
+                        owner,
+                        tool: name,
                     }),
                 )
                 .await

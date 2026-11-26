@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::Utc;
+use rpc_mcp_core::audit::{summarize_target, AuditLog, AuditMeta};
 use rpc_mcp_core::delete_guard::{DeleteGuard, GuardDecision};
 use rpc_mcp_core::{constant_time_eq, extract_bearer_token, write_atomic_string};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,7 @@ pub struct WorkbenchConfig {
     pub state_root: PathBuf,
     pub pwsh_path: String,
     pub enable_delete_guard: bool,
+    pub audit_log: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -654,6 +656,7 @@ impl WorkbenchEngine {
 struct WbState {
     cfg: WorkbenchConfig,
     engine: Arc<WorkbenchEngine>,
+    audit: AuditLog,
 }
 
 fn check_auth(headers: &HeaderMap, expected: &str) -> bool {
@@ -743,6 +746,44 @@ async fn handle_mcp_or_panel(
                 .pointer("/params/arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
+            if matches!(name, "run_command" | "stop_command" | "complete_review") {
+                let meta = AuditMeta::from_header_values(
+                    headers.get("x-mcp-platform").and_then(|v| v.to_str().ok()),
+                    headers.get("x-mcp-owner").and_then(|v| v.to_str().ok()),
+                    headers.get("x-mcp-tool").and_then(|v| v.to_str().ok()),
+                );
+                let tool_name = meta.tool_override.unwrap_or_else(|| {
+                    if name == "run_command" {
+                        args.get("name")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("run_command")
+                            .to_string()
+                    } else if name == "stop_command" {
+                        "workbench_stop".to_string()
+                    } else {
+                        "workbench_review".to_string()
+                    }
+                });
+                let lane = if tool_name.starts_with("git_") {
+                    "git"
+                } else {
+                    "cmd"
+                };
+                let target = summarize_target(&args);
+                state.audit.record(
+                    "tool_call",
+                    json!({
+                        "tool": tool_name,
+                        "lane": lane,
+                        "owner": meta.owner,
+                        "platform": meta.platform,
+                        "target": target,
+                        "source": "local-workbench"
+                    }),
+                );
+            }
             match state.engine.call_tool(name, &args).await {
                 Ok(val) => json!({
                     "jsonrpc": "2.0",
@@ -771,7 +812,8 @@ async fn handle_mcp_or_panel(
 }
 
 pub fn build_router(cfg: WorkbenchConfig, engine: Arc<WorkbenchEngine>) -> Router {
-    let state = Arc::new(WbState { cfg, engine });
+    let audit = AuditLog::new(cfg.audit_log.clone());
+    let state = Arc::new(WbState { cfg, engine, audit });
     Router::new()
         .route("/healthz", get(healthz))
         .route("/hook", post(handle_hook))

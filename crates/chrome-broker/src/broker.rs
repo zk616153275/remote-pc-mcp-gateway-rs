@@ -4,10 +4,12 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use rpc_mcp_core::audit::{summarize_target, AuditLog, AuditMeta};
 use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -28,6 +30,7 @@ pub struct ChromeBrokerConfig {
     pub command: String,
     pub args: Vec<String>,
     pub timeout_ms: u64,
+    pub audit_log: Option<PathBuf>,
 }
 
 impl ChromeBrokerConfig {
@@ -51,6 +54,7 @@ impl ChromeBrokerConfig {
                 format!("http://127.0.0.1:{cdp_port}"),
             ],
             timeout_ms: 120_000,
+            audit_log: None,
         }
     }
 }
@@ -350,6 +354,7 @@ impl SidecarBackend {
 struct BrokerState {
     cfg: ChromeBrokerConfig,
     backend: Arc<SidecarBackend>,
+    audit: AuditLog,
 }
 
 fn check_auth(headers: &HeaderMap, token: &Option<String>) -> bool {
@@ -443,6 +448,28 @@ async fn mcp_post(
                     }
                 })
             } else {
+                let raw_name = params.get("name").and_then(Value::as_str).unwrap_or("unknown");
+                let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                let meta = AuditMeta::from_header_values(
+                    headers.get("x-mcp-platform").and_then(|v| v.to_str().ok()),
+                    headers.get("x-mcp-owner").and_then(|v| v.to_str().ok()),
+                    headers.get("x-mcp-tool").and_then(|v| v.to_str().ok()),
+                );
+                let tool_name = meta
+                    .tool_override
+                    .unwrap_or_else(|| format!("chrome_{raw_name}"));
+                let target = summarize_target(&args);
+                state.audit.record(
+                    "tool_call",
+                    json!({
+                        "tool": tool_name,
+                        "lane": "chrome",
+                        "owner": meta.owner,
+                        "platform": meta.platform,
+                        "target": target,
+                        "source": "local-chrome"
+                    }),
+                );
                 match state.backend.rpc("tools/call", params).await {
                     Ok(res) => json!({ "jsonrpc": "2.0", "id": id, "result": res }),
                     Err(e) => json!({
@@ -468,9 +495,11 @@ async fn mcp_post(
 
 pub fn build_router(cfg: ChromeBrokerConfig) -> (Router, Arc<SidecarBackend>) {
     let backend = SidecarBackend::new(cfg.clone());
+    let audit = AuditLog::new(cfg.audit_log.clone());
     let state = Arc::new(BrokerState {
         cfg,
         backend: Arc::clone(&backend),
+        audit,
     });
     let router = Router::new()
         .route("/healthz", get(healthz))

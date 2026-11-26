@@ -9,6 +9,7 @@ use rpc_mcp_chrome_broker::{
     build_router as build_chrome_router, serve_chrome_broker, ChromeBrokerConfig,
 };
 use rpc_mcp_core::config::AppConfig;
+use rpc_mcp_core::instance_lock::InstanceLock;
 use rpc_mcp_core::path_guard::AllowedRoots;
 use rpc_mcp_fs::{serve_fs_mcp, FsServerConfig};
 use rpc_mcp_gateway::{
@@ -53,6 +54,8 @@ enum Commands {
         workbench_token: Option<String>,
         #[arg(long, default_value = "state/workbench")]
         workbench_state: PathBuf,
+        #[arg(long)]
+        audit_log: Option<PathBuf>,
         #[arg(long, default_value = "pwsh.exe")]
         pwsh: String,
         #[arg(long)]
@@ -121,6 +124,8 @@ enum Commands {
         cdp_port: u16,
         #[arg(long, env = "LOCAL_CHROME_MCP_TOKEN")]
         token: Option<String>,
+        #[arg(long)]
+        audit_log: Option<PathBuf>,
     },
 
     /// Detached per-command Windows Job Object supervisor (invoked internally by workbench)
@@ -170,9 +175,17 @@ async fn main() -> Result<()> {
             fs_token,
             workbench_token,
             workbench_state,
+            audit_log,
             pwsh,
             disable_delete_guard,
         } => {
+            let state_base = workbench_state
+                .parent()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("state"));
+            let _instance_lock = InstanceLock::try_acquire(&state_base.join("agent.lock"), "agent")?;
+            let local_audit = audit_log.unwrap_or_else(|| state_base.join("logs").join("local-audit.jsonl"));
+
             let file_cfg = match config {
                 Some(ref p) => AppConfig::load(p)?,
                 None => AppConfig::default(),
@@ -191,6 +204,7 @@ async fn main() -> Result<()> {
                     .filter(|s| !s.is_empty())
                     .unwrap_or(file_cfg.tokens.fs_token),
                 allowed_roots,
+                audit_log: Some(local_audit.clone()),
             };
 
             let wb_cfg = WorkbenchConfig {
@@ -203,6 +217,7 @@ async fn main() -> Result<()> {
                 pwsh_path: resolve_pwsh(&pwsh),
                 enable_delete_guard: !disable_delete_guard
                     && file_cfg.guards_and_hooks.enable_delete_guard,
+                audit_log: Some(local_audit),
             };
 
             if fs_cfg.bearer_token.is_empty() || wb_cfg.bearer_token.is_empty() {
@@ -305,10 +320,14 @@ async fn main() -> Result<()> {
             port,
             cdp_port,
             token,
+            audit_log,
         } => {
             let mut cfg = ChromeBrokerConfig::default_npx(port, cdp_port);
             cfg.host = host;
             cfg.bearer_token = token.filter(|s| !s.is_empty());
+            cfg.audit_log = Some(
+                audit_log.unwrap_or_else(|| PathBuf::from("state/logs/local-audit.jsonl")),
+            );
             serve_chrome_broker(cfg).await?;
         }
 
@@ -318,6 +337,9 @@ async fn main() -> Result<()> {
             cloudflared,
             pwsh,
         } => {
+            let _instance_lock = InstanceLock::try_acquire(&state_dir.join("agent.lock"), "up")?;
+            let local_audit = state_dir.join("logs").join("local-audit.jsonl");
+
             let cfg = AppConfig::load(&config)?;
             let allowed_roots = AllowedRoots::new(cfg.allowed_roots.clone())?;
             let host = "127.0.0.1".to_string();
@@ -327,6 +349,7 @@ async fn main() -> Result<()> {
                 port: cfg.local_ports.fs_bearer,
                 bearer_token: cfg.tokens.fs_token.clone(),
                 allowed_roots,
+                audit_log: Some(local_audit.clone()),
             };
             let wb_cfg = WorkbenchConfig {
                 host: host.clone(),
@@ -335,6 +358,7 @@ async fn main() -> Result<()> {
                 state_root: state_dir.join("workbench"),
                 pwsh_path: resolve_pwsh(&pwsh),
                 enable_delete_guard: cfg.guards_and_hooks.enable_delete_guard,
+                audit_log: Some(local_audit.clone()),
             };
             let mut chrome_ok = false;
             let mut chrome_backend = None;
@@ -351,6 +375,7 @@ async fn main() -> Result<()> {
                             cfg.local_ports.chrome_cdp,
                         );
                         ch_cfg.bearer_token = Some(chrome_token.clone());
+                        ch_cfg.audit_log = Some(local_audit.clone());
                         let (ch_app, backend) = build_chrome_router(ch_cfg);
                         tokio::spawn(async move {
                             let _ = axum::serve(ch_listener, ch_app).await;

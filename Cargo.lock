@@ -3378,6 +3378,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "rand 0.8.8",
+ "reqwest 0.12.28",
  "rpc-mcp-bridge",
  "rpc-mcp-chrome-broker",
  "rpc-mcp-core",
@@ -3391,6 +3392,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
