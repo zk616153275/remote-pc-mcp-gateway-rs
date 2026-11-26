@@ -311,11 +311,29 @@ impl GatewayState {
         let mut all = Vec::new();
         let readwrite = self.cfg.mode.eq_ignore_ascii_case("readwrite");
 
+        let fs_fut = self.upstream_rpc(&self.cfg.fs_url, &self.cfg.fs_token, "tools/list", json!({}), None);
+        let chrome_enabled = self.cfg.enable_chrome && !self.cfg.chrome_url.is_empty();
+        let chrome_fut = async {
+            if chrome_enabled {
+                Some(
+                    self.upstream_rpc(
+                        &self.cfg.chrome_url,
+                        &self.cfg.chrome_token,
+                        "tools/list",
+                        json!({}),
+                        None,
+                    )
+                    .await,
+                )
+            } else {
+                None
+            }
+        };
+
+        let (fs_res, chrome_res) = tokio::join!(fs_fut, chrome_fut);
+
         // 1. Upstream FS tools
-        match self
-            .upstream_rpc(&self.cfg.fs_url, &self.cfg.fs_token, "tools/list", json!({}), None)
-            .await
-        {
+        match fs_res {
             Ok(res) => {
                 if let Some(arr) = res.get("tools").and_then(Value::as_array) {
                     for item in arr {
@@ -355,17 +373,8 @@ impl GatewayState {
         }
 
         // 3. Optional Chrome MCP tools
-        if self.cfg.enable_chrome && !self.cfg.chrome_url.is_empty() {
-            match self
-                .upstream_rpc(
-                    &self.cfg.chrome_url,
-                    &self.cfg.chrome_token,
-                    "tools/list",
-                    json!({}),
-                    None,
-                )
-                .await
-            {
+        if let Some(ch_res) = chrome_res {
+            match ch_res {
                 Ok(res) => {
                     if let Some(arr) = res.get("tools").and_then(Value::as_array) {
                         for item in arr {
@@ -631,6 +640,24 @@ impl GatewayState {
             if !self.cfg.enable_chrome {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "Chrome MCP is disabled" }] });
             }
+            let roots_for_check: Vec<String> = if self.cfg.allowed_roots.is_empty() {
+                vec![self.cfg.workspace_root.clone()]
+            } else {
+                self.cfg.allowed_roots.clone()
+            };
+            if let Some(fp) = args
+                .get("filePath")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if let Err(e) = validate_workspace_path_lexical(fp, &roots_for_check) {
+                    return json!({
+                        "isError": true,
+                        "content": [{ "type": "text", "text": format!("chrome filePath rejected: {e}") }]
+                    });
+                }
+            }
             if platform == Platform::Google && chrome_tool == "take_screenshot" {
                 let has_path = args
                     .get("filePath")
@@ -840,10 +867,16 @@ impl GatewayState {
                 .await
             {
                 Ok(v) => v,
-                Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+                Err(e) => {
+                    let err_res = json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] });
+                    self.journal.record_finished(&task_id, err_res.clone());
+                    return err_res;
+                }
             };
             let Some(ctx_id) = hook.get("contextId").and_then(Value::as_str) else {
-                return json!({ "isError": true, "content": [{ "type": "text", "text": "workbench hook returned no contextId" }] });
+                let err_res = json!({ "isError": true, "content": [{ "type": "text", "text": "workbench hook returned no contextId" }] });
+                self.journal.record_finished(&task_id, err_res.clone());
+                return err_res;
             };
 
             let mut terminal = true;

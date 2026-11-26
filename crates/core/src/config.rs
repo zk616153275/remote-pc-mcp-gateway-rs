@@ -162,6 +162,7 @@ impl Default for LocalPortsConfig {
 pub struct TokensConfig {
     pub fs_token: String,
     pub workbench_token: String,
+    pub chrome_token: String,
 }
 
 impl AppConfig {

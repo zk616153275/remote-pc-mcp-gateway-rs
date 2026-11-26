@@ -121,11 +121,25 @@ mod win_impl {
 
     struct LogState {
         dir: PathBuf,
+        file: Option<fs::File>,
         bytes: u64,
         base: u64,
     }
 
     impl LogState {
+        fn open_log_file(&mut self) -> Option<&mut fs::File> {
+            if self.file.is_none() {
+                let log_path = self.dir.join("output.jsonl");
+                self.file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | 0x00000004)
+                    .open(&log_path)
+                    .ok();
+            }
+            self.file.as_mut()
+        }
+
         fn append(&mut self, stream: &str, text: &str) {
             let line = format!(
                 "{}\n",
@@ -137,26 +151,36 @@ mod win_impl {
             );
             let log_path = self.dir.join("output.jsonl");
             if self.bytes + line.len() as u64 > LOG_LIMIT {
+                self.file = None;
                 let prev = self.dir.join("output.jsonl.previous");
                 let _ = fs::rename(&log_path, &prev);
                 self.base += self.bytes;
                 self.bytes = 0;
             }
-            if let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | 0x00000004)
-                .open(&log_path)
-            {
-                if self.bytes == 0 {
-                    let header = format!("{}\n", json!({ "logBase": self.base }));
+            let need_header = self.bytes == 0;
+            let base = self.base;
+            let mut written = 0u64;
+            let mut failed = false;
+            if let Some(file) = self.open_log_file() {
+                if need_header {
+                    let header = format!("{}\n", json!({ "logBase": base }));
                     if file.write_all(header.as_bytes()).is_ok() {
-                        self.bytes += header.len() as u64;
+                        written += header.len() as u64;
+                    } else {
+                        failed = true;
                     }
                 }
-                if file.write_all(line.as_bytes()).is_ok() {
-                    self.bytes += line.len() as u64;
+                if !failed {
+                    if file.write_all(line.as_bytes()).is_ok() {
+                        written += line.len() as u64;
+                    } else {
+                        failed = true;
+                    }
                 }
+            }
+            self.bytes += written;
+            if failed {
+                self.file = None;
             }
         }
     }
@@ -609,6 +633,7 @@ mod win_impl {
 
         let log_state = Arc::new(Mutex::new(LogState {
             dir: dir.clone(),
+            file: None,
             bytes: 0,
             base: 0,
         }));
@@ -619,7 +644,17 @@ mod win_impl {
             ResumeThread(pi.hThread);
         }
 
+        #[derive(PartialEq, Eq)]
+        struct StatusSig {
+            state: &'static str,
+            exit_code: Option<i64>,
+            timed_out: bool,
+            pids: Vec<u32>,
+            ports: Vec<u16>,
+        }
         let elapsed = Instant::now();
+        let mut last_status_save = Instant::now() - Duration::from_secs(10);
+        let mut last_sig: Option<StatusSig> = None;
         let mut stopped = false;
         let mut timed_out = false;
         let mut root_exit_code: Option<i64> = None;
@@ -676,25 +711,43 @@ mod win_impl {
                 None
             };
 
-            let status = CommandStatus {
-                command_id: spec.command_id.clone(),
-                state: state.to_string(),
-                supervisor: identity.clone(),
-                root_pid: Some(pi.dwProcessId),
-                root_exit_code,
-                root_exited_at,
-                started_at,
-                updated_at: Utc::now(),
-                timed_out,
+            let ports = query_listening_ports(&pids);
+            let sig = StatusSig {
+                state,
                 exit_code,
-                processes: describe_processes(&pids),
-                ports: query_listening_ports(&pids),
-                finished_at: if finished { Some(Utc::now()) } else { None },
-                error: None,
+                timed_out,
+                pids: pids.clone(),
+                ports: ports.clone(),
             };
-            let saved = save_status(&dir, &status);
-            if finished && saved {
-                break;
+            let should_save = finished
+                || last_sig.as_ref() != Some(&sig)
+                || last_status_save.elapsed() >= Duration::from_secs(2);
+
+            if should_save {
+                let status = CommandStatus {
+                    command_id: spec.command_id.clone(),
+                    state: state.to_string(),
+                    supervisor: identity.clone(),
+                    root_pid: Some(pi.dwProcessId),
+                    root_exit_code,
+                    root_exited_at,
+                    started_at,
+                    updated_at: Utc::now(),
+                    timed_out,
+                    exit_code,
+                    processes: describe_processes(&pids),
+                    ports,
+                    finished_at: if finished { Some(Utc::now()) } else { None },
+                    error: None,
+                };
+                let saved = save_status(&dir, &status);
+                if saved {
+                    last_status_save = Instant::now();
+                    last_sig = Some(sig);
+                }
+                if finished && saved {
+                    break;
+                }
             }
             thread::sleep(Duration::from_millis(250));
         }

@@ -16,6 +16,7 @@ impl ServiceLanes {
             ("git", 8),
             ("chrome", 8),
             ("cmd", 6),
+            ("wait", 32),
         ] {
             lanes.insert(name, (Arc::new(Semaphore::new(limit)), limit));
         }
@@ -23,12 +24,29 @@ impl ServiceLanes {
     }
 
     pub fn lane_for_tool(name: &str) -> &'static str {
-        if name.starts_with("chrome_") {
+        if name == "wait" {
+            "wait"
+        } else if name.starts_with("chrome_") {
             "chrome"
         } else if name.starts_with("git_") {
             "git"
-        } else if name == "run_command" || name == "inspect_image" {
+        } else if matches!(
+            name,
+            "run_command"
+                | "inspect_image"
+                | "workbench_status"
+                | "workbench_stop"
+                | "workbench_review"
+        ) {
             "cmd"
+        } else if matches!(
+            name,
+            "fs_directory_tree"
+                | "fs_directory_tree_limited"
+                | "fs_search_files"
+                | "fs_grep_files"
+        ) {
+            "discovery"
         } else {
             "fs"
         }
@@ -56,5 +74,22 @@ impl ServiceLanes {
             );
         }
         Value::Object(map)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routes_tools_to_expected_lanes() {
+        assert_eq!(ServiceLanes::lane_for_tool("wait"), "wait");
+        assert_eq!(ServiceLanes::lane_for_tool("fs_grep_files"), "discovery");
+        assert_eq!(ServiceLanes::lane_for_tool("fs_directory_tree"), "discovery");
+        assert_eq!(ServiceLanes::lane_for_tool("fs_read_file"), "fs");
+        assert_eq!(ServiceLanes::lane_for_tool("workbench_status"), "cmd");
+        assert_eq!(ServiceLanes::lane_for_tool("run_command"), "cmd");
+        assert_eq!(ServiceLanes::lane_for_tool("git_status"), "git");
+        assert_eq!(ServiceLanes::lane_for_tool("chrome_list_pages"), "chrome");
     }
 }

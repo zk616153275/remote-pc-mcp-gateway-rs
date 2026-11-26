@@ -152,10 +152,11 @@ pub async fn run_inspect_image(
 
     let res = if use_gemini {
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            cfg.gemini_model, cfg.gemini_api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            cfg.gemini_model
         );
         http.post(&url)
+            .header("x-goog-api-key", &cfg.gemini_api_key)
             .json(&json!({
                 "contents": [{
                     "parts": [
@@ -201,7 +202,7 @@ pub async fn run_inspect_image(
         }),
         Err(e) => json!({
             "isError": true,
-            "content": [{ "type": "text", "text": format!("vision API request failed: {e}") }]
+            "content": [{ "type": "text", "text": format!("vision API request failed: {}", e.without_url()) }]
         }),
     }
 }

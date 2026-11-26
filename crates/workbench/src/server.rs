@@ -154,7 +154,7 @@ impl WorkbenchEngine {
     }
 
     pub fn hook(&self, body: &Value) -> Result<Value> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
         let phase = body.get("phase").and_then(Value::as_str).unwrap_or("lookup");
         let agent = body.get("agent").and_then(Value::as_str).unwrap_or("mcp-gateway");
         let session_id = body
@@ -396,6 +396,29 @@ impl WorkbenchEngine {
                                 }
                             }
                         }
+                    } else if n > 0 && n == to_read && rel_offset + (n as u64) < file_len {
+                        // Single JSONL record exceeds max_bytes: scan forward to the next newline
+                        // (capped at 2 MiB) so rel_offset always advances and callers never stall.
+                        let mut full = buf[..n].to_vec();
+                        let mut reader = BufReader::new(&mut f);
+                        let mut tail = Vec::new();
+                        let extra = reader.read_until(b'\n', &mut tail).unwrap_or(0);
+                        let advance = (n + extra) as u64;
+                        rel_offset += advance;
+                        if full.len() + extra <= 2 * 1024 * 1024 {
+                            full.extend_from_slice(&tail[..extra]);
+                            let line = String::from_utf8_lossy(&full);
+                            if let Ok(val) = serde_json::from_str::<Value>(line.trim()) {
+                                if let Some(t) = val.get("text").and_then(Value::as_str) {
+                                    text.push_str(t);
+                                    if want_entries {
+                                        entries.push(val);
+                                    }
+                                }
+                            }
+                        } else {
+                            truncated = true;
+                        }
                     }
                     next_offset = log_base.saturating_add(rel_offset);
                     has_more = rel_offset < file_len;
@@ -450,7 +473,7 @@ impl WorkbenchEngine {
                 }
 
                 let command_id = {
-                    let _g = self.lock.lock().unwrap();
+                    let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
                     let ctx: SessionRecord = self
                         .read_json(&self.context_file(context_id))
                         .ok_or_else(|| anyhow::anyhow!("unknown contextId: {context_id}"))?;
@@ -589,7 +612,7 @@ impl WorkbenchEngine {
                 let revision = args["revision"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("revision is required"))?;
-                let _g = self.lock.lock().unwrap();
+                let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
                 let ctx: SessionRecord = self
                     .read_json(&self.context_file(context_id))
                     .ok_or_else(|| anyhow::anyhow!("unknown contextId: {context_id}"))?;
@@ -829,6 +852,15 @@ pub async fn serve_workbench(cfg: WorkbenchConfig) -> Result<()> {
         cfg.pwsh_path.clone(),
         cfg.enable_delete_guard,
     )?);
+    let prune_engine = Arc::clone(&engine);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            let eng = Arc::clone(&prune_engine);
+            let _ = tokio::task::spawn_blocking(move || eng.prune()).await;
+        }
+    });
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port).parse()?;
     let app = build_router(cfg, engine);
     let listener = TcpListener::bind(addr).await?;
@@ -840,3 +872,35 @@ pub async fn serve_workbench(cfg: WorkbenchConfig) -> Result<()> {
 // Keep HashMap import clean for future panel extensions
 #[allow(dead_code)]
 type _UnusedMap = HashMap<String, Value>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_output_chunk_advances_past_single_line_exceeding_max_bytes() {
+        let dir = std::env::temp_dir().join(format!("rmcp-wb-chunk-{}", Uuid::new_v4()));
+        let engine = WorkbenchEngine::new(dir.clone(), "pwsh.exe".into(), false).unwrap();
+        let cid = "c_test_long_line";
+        let cdir = engine.command_dir(cid);
+        fs::create_dir_all(&cdir).unwrap();
+
+        let big_payload = "A".repeat(2500);
+        let line1 = format!("{}\n", json!({ "at": "2026-01-01T00:00:00Z", "stream": "stdout", "text": big_payload }));
+        let line2 = format!("{}\n", json!({ "at": "2026-01-01T00:00:01Z", "stream": "stdout", "text": "tail" }));
+        fs::write(cdir.join("output.jsonl"), format!("{line1}{line2}")).unwrap();
+
+        // max_bytes=1024 is smaller than line1 (>2500 bytes); must still advance offset without stalling
+        let chunk1 = engine.read_output_chunk(cid, 0, 1024, false);
+        let next1 = chunk1["nextOffset"].as_u64().unwrap();
+        assert_eq!(next1, line1.len() as u64);
+        assert_eq!(chunk1["text"].as_str().unwrap(), big_payload);
+        assert!(chunk1["hasMore"].as_bool().unwrap());
+
+        let chunk2 = engine.read_output_chunk(cid, next1, 1024, false);
+        assert_eq!(chunk2["text"].as_str().unwrap(), "tail");
+        assert!(!chunk2["hasMore"].as_bool().unwrap());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

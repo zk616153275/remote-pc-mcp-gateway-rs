@@ -230,6 +230,7 @@ pub fn search_files_sync(
     let mut matches = Vec::new();
     let mut visited = 0usize;
     let max_visited = 80_000usize;
+    let pattern_lower = pattern.to_lowercase();
 
     for entry in walker.build().flatten() {
         if entry.depth() == 0 {
@@ -249,7 +250,7 @@ pub fn search_files_sync(
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if glob.is_match(rel)
             || glob.is_match(name)
-            || name.to_lowercase().contains(&pattern.to_lowercase())
+            || name.to_lowercase().contains(&pattern_lower)
         {
             matches.push(path.display().to_string());
             if matches.len() >= max_results {

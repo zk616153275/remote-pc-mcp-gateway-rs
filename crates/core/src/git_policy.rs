@@ -20,6 +20,12 @@ pub const BLOCKED_GIT_TOKENS: &[&str] = &[
     "exec",
     "upload-pack",
     "receive-pack",
+    "no-index",
+    "exclude-from",
+    "exclude-per-directory",
+    "git-dir",
+    "work-tree",
+    "c",
 ];
 
 pub const MAX_GIT_ARGS: usize = 16;
@@ -32,6 +38,40 @@ pub enum GitPolicyError {
     BlockedToken(String),
     #[error("shell metacharacters are not allowed in git args: {0}")]
     ShellMetachar(String),
+    #[error("absolute or traversal paths are not allowed in git args: {0}")]
+    UnsafePath(String),
+}
+
+fn is_unsafe_git_path_arg(arg: &str) -> bool {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Check value portion if this is a `--flag=value` option
+    let candidate = trimmed
+        .split_once('=')
+        .map(|(_, v)| v.trim())
+        .unwrap_or(trimmed);
+    let bytes = candidate.as_bytes();
+    // Windows drive path (e.g. C:\... or C:/...) or UNC path (\\server\...)
+    if (bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/'))
+        || candidate.starts_with(r"\\")
+        || candidate.starts_with('/')
+    {
+        return true;
+    }
+    // Path traversal segments (note: git revision ranges like HEAD~3..HEAD are allowed)
+    if candidate == ".."
+        || candidate.starts_with("../")
+        || candidate.starts_with(r"..\")
+        || candidate.contains("/../")
+        || candidate.contains(r"\..\")
+        || candidate.ends_with("/..")
+        || candidate.ends_with(r"\..")
+    {
+        return true;
+    }
+    false
 }
 
 pub fn validate_readonly_git_args(args: &[String]) -> Result<(), GitPolicyError> {
@@ -41,6 +81,9 @@ pub fn validate_readonly_git_args(args: &[String]) -> Result<(), GitPolicyError>
     for arg in args {
         if arg.contains(['|', '&', ';', '<', '>', '`', '$']) {
             return Err(GitPolicyError::ShellMetachar(arg.clone()));
+        }
+        if is_unsafe_git_path_arg(arg) {
+            return Err(GitPolicyError::UnsafePath(arg.clone()));
         }
         let normalized = arg
             .trim()
@@ -63,6 +106,7 @@ mod tests {
     #[test]
     fn allows_readonly_and_blocks_mutating_or_metachar_git_args() {
         assert!(validate_readonly_git_args(&["-n".into(), "10".into(), "--oneline".into()]).is_ok());
+        assert!(validate_readonly_git_args(&["HEAD~3..HEAD".into(), "--".into(), "src/main.rs".into()]).is_ok());
         assert_eq!(
             validate_readonly_git_args(&["reset".into(), "--hard".into()]),
             Err(GitPolicyError::BlockedToken("reset".into()))
@@ -73,12 +117,28 @@ mod tests {
         );
         assert_eq!(
             validate_readonly_git_args(&["--output=C:\\evil.txt".into()]),
+            Err(GitPolicyError::UnsafePath("--output=C:\\evil.txt".into()))
+        );
+        assert_eq!(
+            validate_readonly_git_args(&["--output=evil.txt".into()]),
             Err(GitPolicyError::BlockedToken("output".into()))
+        );
+        assert_eq!(
+            validate_readonly_git_args(&["--no-index".into(), "a.txt".into(), "b.txt".into()]),
+            Err(GitPolicyError::BlockedToken("no-index".into()))
         );
         assert_eq!(
             validate_readonly_git_args(&["--ext-diff".into()]),
             Err(GitPolicyError::BlockedToken("ext-diff".into()))
         );
+        assert!(matches!(
+            validate_readonly_git_args(&["C:\\Windows\\win.ini".into()]),
+            Err(GitPolicyError::UnsafePath(_))
+        ));
+        assert!(matches!(
+            validate_readonly_git_args(&["../secret.txt".into()]),
+            Err(GitPolicyError::UnsafePath(_))
+        ));
         assert!(matches!(
             validate_readonly_git_args(&["HEAD; whoami".into()]),
             Err(GitPolicyError::ShellMetachar(_))

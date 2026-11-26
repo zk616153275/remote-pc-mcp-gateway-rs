@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use rpc_mcp_core::audit::{summarize_target, AuditLog, AuditMeta};
+use rpc_mcp_core::path_guard::AllowedRoots;
 use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -22,6 +23,47 @@ use tracing::{info, warn};
 
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
+/// Lightweight scan for `"id": <u64>` in an oversized JSON-RPC line without full JSON parsing.
+fn extract_jsonrpc_id_fast(line: &str) -> Option<u64> {
+    let bytes = line.as_bytes();
+    let needle = b"\"id\"";
+    // Check prefix and suffix windows since JSON-RPC `"id"` appears near either end
+    let windows: [&[u8]; 2] = [
+        &bytes[..bytes.len().min(4096)],
+        &bytes[bytes.len().saturating_sub(4096)..],
+    ];
+    for win in windows {
+        let mut pos = 0;
+        while pos + needle.len() < win.len() {
+            if &win[pos..pos + needle.len()] == needle {
+                let mut i = pos + needle.len();
+                while i < win.len() && win[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                if i < win.len() && win[i] == b':' {
+                    i += 1;
+                    while i < win.len() && win[i].is_ascii_whitespace() {
+                        i += 1;
+                    }
+                    let start = i;
+                    while i < win.len() && win[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    if i > start {
+                        if let Ok(s) = std::str::from_utf8(&win[start..i]) {
+                            if let Ok(id) = s.parse::<u64>() {
+                                return Some(id);
+                            }
+                        }
+                    }
+                }
+            }
+            pos += 1;
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct ChromeBrokerConfig {
     pub host: String,
@@ -31,6 +73,7 @@ pub struct ChromeBrokerConfig {
     pub args: Vec<String>,
     pub timeout_ms: u64,
     pub audit_log: Option<PathBuf>,
+    pub allowed_roots: Option<AllowedRoots>,
 }
 
 impl ChromeBrokerConfig {
@@ -55,6 +98,7 @@ impl ChromeBrokerConfig {
             ],
             timeout_ms: 120_000,
             audit_log: None,
+            allowed_roots: None,
         }
     }
 }
@@ -197,7 +241,19 @@ impl SidecarBackend {
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                let oversized = line.len() > MAX_RESPONSE_BYTES;
+                if line.len() > MAX_RESPONSE_BYTES {
+                    // Extract numeric JSON-RPC id without parsing the oversized payload
+                    let id = extract_jsonrpc_id_fast(&line);
+                    if let Some(id) = id {
+                        if let Some(tx) = pending_reader.lock().await.remove(&id) {
+                            let _ = tx.send(Err(
+                                "RESPONSE_TOO_LARGE: Chrome result exceeds 8 MiB; use a smaller capture"
+                                    .into(),
+                            ));
+                        }
+                    }
+                    continue;
+                }
                 let Ok(msg) = serde_json::from_str::<Value>(&line) else {
                     continue;
                 };
@@ -218,12 +274,7 @@ impl SidecarBackend {
                 }
                 if let Some(id) = msg.get("id").and_then(Value::as_u64) {
                     if let Some(tx) = pending_reader.lock().await.remove(&id) {
-                        if oversized {
-                            let _ = tx.send(Err(
-                                "RESPONSE_TOO_LARGE: Chrome result exceeds 8 MiB; use a smaller capture"
-                                    .into(),
-                            ));
-                        } else if let Some(err) = msg.get("error") {
+                        if let Some(err) = msg.get("error") {
                             let _ = tx.send(Err(
                                 err["message"]
                                     .as_str()
@@ -331,11 +382,16 @@ impl SidecarBackend {
         let res = self
             .send_rpc(&stdin, &pending, method, params, self.cfg.timeout_ms)
             .await;
-        if res.is_err() {
-            // Recycle wedged sidecar if it exited
+        if let Err(ref e) = res {
+            let timed_out = e.to_string().contains("timed out");
+            // Recycle exited or wedged (timed-out) sidecar so subsequent calls get a clean process
             let mut guard = self.inner.lock().await;
             if let Some(ref mut r) = *guard {
-                if r.child.try_wait().ok().flatten().is_some() {
+                if timed_out || r.child.try_wait().ok().flatten().is_some() {
+                    if timed_out {
+                        warn!("Recycling wedged Chrome sidecar after RPC timeout");
+                        let _ = r.child.kill().await;
+                    }
                     *guard = None;
                 }
             }
@@ -450,6 +506,29 @@ async fn mcp_post(
             } else {
                 let raw_name = params.get("name").and_then(Value::as_str).unwrap_or("unknown");
                 let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                if let Some(ref roots) = state.cfg.allowed_roots {
+                    if let Some(fp) = args
+                        .get("filePath")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        if let Err(e) = roots.validate(fp) {
+                            return (
+                                StatusCode::OK,
+                                Json(json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": {
+                                        "isError": true,
+                                        "content": [{ "type": "text", "text": format!("chrome filePath rejected: {e}") }]
+                                    }
+                                })),
+                            )
+                                .into_response();
+                        }
+                    }
+                }
                 let meta = AuditMeta::from_header_values(
                     headers.get("x-mcp-platform").and_then(|v| v.to_str().ok()),
                     headers.get("x-mcp-owner").and_then(|v| v.to_str().ok()),
@@ -517,4 +596,19 @@ pub async fn serve_chrome_broker(cfg: ChromeBrokerConfig) -> Result<()> {
     backend.shutdown().await;
     res?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_jsonrpc_id_from_prefix_or_suffix() {
+        assert_eq!(
+            extract_jsonrpc_id_fast(r#"{"jsonrpc":"2.0","id":42,"result":{"data":"x"}}"#),
+            Some(42)
+        );
+        let big = format!(r#"{{"jsonrpc":"2.0","result":"{}","id": 98765}}"#, "x".repeat(10_000));
+        assert_eq!(extract_jsonrpc_id_fast(&big), Some(98765));
+    }
 }

@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 pub const RESPONSE_LIMIT_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_EDIT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolResult {
@@ -327,6 +328,9 @@ fn read_text_with_bounds(
                 }
             }
             ring_bytes = ring_bytes.saturating_add(line.len() + 1);
+            if ring_bytes as u64 > RESPONSE_LIMIT_BYTES * 2 {
+                return Err(ToolResult::oversized());
+            }
             ring.push_back(line);
         }
         if ring_bytes as u64 > RESPONSE_LIMIT_BYTES {
@@ -359,6 +363,15 @@ fn mime_for_path(path: &Path) -> &'static str {
 }
 
 pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
+    let roots = roots.clone();
+    let name = name.to_string();
+    match tokio::task::spawn_blocking(move || call_tool_sync(&roots, &name, args)).await {
+        Ok(res) => res,
+        Err(e) => ToolResult::error(e.to_string()),
+    }
+}
+
+fn call_tool_sync(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
     match name {
         "list_allowed_directories" => {
             let lines: Vec<String> = roots
@@ -457,12 +470,9 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                         .collect()
                 })
                 .unwrap_or_default();
-            match tokio::task::spawn_blocking(move || directory_tree_json_sync(&path, 6, &excludes))
-                .await
-            {
-                Ok(Ok(text)) => ToolResult::text(text),
-                Ok(Err(e)) => ToolResult::error(e),
-                Err(e) => ToolResult::error(e.to_string()),
+            match directory_tree_json_sync(&path, 6, &excludes) {
+                Ok(text) => ToolResult::text(text),
+                Err(e) => ToolResult::error(e),
             }
         }
 
@@ -494,14 +504,9 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                         .collect()
                 })
                 .unwrap_or_default();
-            match tokio::task::spawn_blocking(move || {
-                directory_tree_text_sync(&path, max_depth, dirs_only, &excludes)
-            })
-            .await
-            {
-                Ok(Ok(text)) => ToolResult::text(text),
-                Ok(Err(e)) => ToolResult::error(e),
-                Err(e) => ToolResult::error(e.to_string()),
+            match directory_tree_text_sync(&path, max_depth, dirs_only, &excludes) {
+                Ok(text) => ToolResult::text(text),
+                Err(e) => ToolResult::error(e),
             }
         }
 
@@ -528,14 +533,9 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                         .collect()
                 })
                 .unwrap_or_default();
-            match tokio::task::spawn_blocking(move || {
-                search_files_sync(&path, &pattern, &excludes, 500)
-            })
-            .await
-            {
-                Ok(Ok(text)) => ToolResult::text(text),
-                Ok(Err(e)) => ToolResult::error(e),
-                Err(e) => ToolResult::error(e.to_string()),
+            match search_files_sync(&path, &pattern, &excludes, 500) {
+                Ok(text) => ToolResult::text(text),
+                Err(e) => ToolResult::error(e),
             }
         }
 
@@ -571,14 +571,9 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                         .collect()
                 })
                 .unwrap_or_default();
-            match tokio::task::spawn_blocking(move || {
-                grep_files_sync(&path, &pattern, is_regex, &globs, context, max_results)
-            })
-            .await
-            {
-                Ok(Ok(text)) => ToolResult::text(text),
-                Ok(Err(e)) => ToolResult::error(e),
-                Err(e) => ToolResult::error(e.to_string()),
+            match grep_files_sync(&path, &pattern, is_regex, &globs, context, max_results) {
+                Ok(text) => ToolResult::text(text),
+                Err(e) => ToolResult::error(e),
             }
         }
 
@@ -683,17 +678,29 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 Ok(f) => f,
                 Err(e) => return ToolResult::error(e.to_string()),
             };
-            let reader = BufReader::new(file);
+            let mut reader = BufReader::new(file);
             let mut numbered = Vec::new();
             let mut total_lines = 0usize;
             let end_line = offset.saturating_add(limit).saturating_sub(1);
-            for line_res in reader.lines() {
-                let line = match line_res {
-                    Ok(l) => l,
+            let mut buf = Vec::with_capacity(256);
+            loop {
+                buf.clear();
+                let n = match reader.read_until(b'\n', &mut buf) {
+                    Ok(n) => n,
                     Err(e) => return ToolResult::error(e.to_string()),
                 };
+                if n == 0 {
+                    break;
+                }
                 total_lines += 1;
                 if total_lines >= offset && total_lines <= end_line {
+                    if buf.ends_with(b"\n") {
+                        buf.pop();
+                    }
+                    if buf.ends_with(b"\r") {
+                        buf.pop();
+                    }
+                    let line = String::from_utf8_lossy(&buf);
                     numbered.push(format!("{total_lines}: {line}"));
                 }
             }
@@ -792,6 +799,11 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 Ok(v) => v,
                 Err(e) => return ToolResult::error(e),
             };
+            match fs::metadata(&path) {
+                Ok(m) if m.len() > MAX_EDIT_BYTES => return ToolResult::oversized(),
+                Ok(_) => {}
+                Err(e) => return ToolResult::error(e.to_string()),
+            }
             let original = match fs::read_to_string(&path) {
                 Ok(s) => s,
                 Err(e) => return ToolResult::error(e.to_string()),
@@ -853,6 +865,11 @@ pub async fn call_tool(roots: &AllowedRoots, name: &str, args: Value) -> ToolRes
                 Ok(p) => p,
                 Err(e) => return ToolResult::error(e.to_string()),
             };
+            match fs::metadata(&path) {
+                Ok(m) if m.len() > MAX_EDIT_BYTES => return ToolResult::oversized(),
+                Ok(_) => {}
+                Err(e) => return ToolResult::error(e.to_string()),
+            }
             let content = match fs::read_to_string(&path) {
                 Ok(s) => s,
                 Err(e) => return ToolResult::error(e.to_string()),

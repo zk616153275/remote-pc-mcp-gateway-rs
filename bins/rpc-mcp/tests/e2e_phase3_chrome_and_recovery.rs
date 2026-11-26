@@ -45,6 +45,7 @@ rl.on("line", (line) => {
         args: vec![mock_js.to_string_lossy().to_string()],
         timeout_ms: 10_000,
         audit_log: None,
+        allowed_roots: None,
     });
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;

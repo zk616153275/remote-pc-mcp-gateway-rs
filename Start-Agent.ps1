@@ -107,7 +107,7 @@ $runtime = @{
     services = @{
         fsMcp = @{ ok = $true; port = $fsPort; pid = $agentProc.Id }
         workbench = @{ ok = $true; port = $wbPort; pid = $agentProc.Id }
-        tunnel = @{ ok = ($sshPid -ne $null); detail = "ssh root@$($cfg.vps.host):$($cfg.vps.sshPort)"; pid = $sshPid }
+        tunnel = @{ ok = ($sshPid -ne $null); detail = "ssh $sshUser@$($cfg.vps.host):$sshPort"; pid = $sshPid }
     }
 }
 $runtimeJson = $runtime | ConvertTo-Json -Depth 5

@@ -343,12 +343,19 @@ async fn main() -> Result<()> {
             let cfg = AppConfig::load(&config)?;
             let allowed_roots = AllowedRoots::new(cfg.allowed_roots.clone())?;
             let host = "127.0.0.1".to_string();
+            let is_vps = cfg.connection_mode == "vps" || cfg.connection_mode == "vps-ssh";
+
+            if cfg.tokens.fs_token.is_empty() || cfg.tokens.workbench_token.is_empty() {
+                anyhow::bail!(
+                    "both tokens.fsToken and tokens.workbenchToken must be configured"
+                );
+            }
 
             let fs_cfg = FsServerConfig {
                 host: host.clone(),
                 port: cfg.local_ports.fs_bearer,
                 bearer_token: cfg.tokens.fs_token.clone(),
-                allowed_roots,
+                allowed_roots: allowed_roots.clone(),
                 audit_log: Some(local_audit.clone()),
             };
             let wb_cfg = WorkbenchConfig {
@@ -362,11 +369,19 @@ async fn main() -> Result<()> {
             };
             let mut chrome_ok = false;
             let mut chrome_backend = None;
-            let chrome_token = format!(
-                "{}{}",
-                uuid::Uuid::new_v4().simple(),
-                uuid::Uuid::new_v4().simple()
-            );
+            let chrome_token = if !cfg.tokens.chrome_token.trim().is_empty() {
+                cfg.tokens.chrome_token.clone()
+            } else if is_vps {
+                // In VPS mode without an explicit shared chromeToken, omit ephemeral token
+                // so the remote VPS gateway over SSH -R is not rejected with 401.
+                String::new()
+            } else {
+                format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                )
+            };
             if cfg.gateway.enable_chrome {
                 match TcpListener::bind(("127.0.0.1", cfg.local_ports.chrome_mcp)).await {
                     Ok(ch_listener) => {
@@ -374,8 +389,13 @@ async fn main() -> Result<()> {
                             cfg.local_ports.chrome_mcp,
                             cfg.local_ports.chrome_cdp,
                         );
-                        ch_cfg.bearer_token = Some(chrome_token.clone());
+                        ch_cfg.bearer_token = if chrome_token.is_empty() {
+                            None
+                        } else {
+                            Some(chrome_token.clone())
+                        };
                         ch_cfg.audit_log = Some(local_audit.clone());
+                        ch_cfg.allowed_roots = Some(allowed_roots);
                         let (ch_app, backend) = build_chrome_router(ch_cfg);
                         tokio::spawn(async move {
                             let _ = axum::serve(ch_listener, ch_app).await;
@@ -439,13 +459,20 @@ async fn main() -> Result<()> {
 
             let mcp_path = gw_cfg.mcp_path();
             let gw_addr: SocketAddr = format!("127.0.0.1:{}", gw_cfg.port).parse()?;
-            let (gw_router, gw_handle) = build_gateway_router(gw_cfg);
+            // Bind local gateway BEFORE starting any public tunnel (skip local gateway in VPS mode)
+            let local_gw = if !is_vps {
+                let (gw_router, gw_handle) = build_gateway_router(gw_cfg);
+                let gw_listener = TcpListener::bind(gw_addr).await?;
+                Some((gw_listener, gw_router, gw_handle))
+            } else {
+                None
+            };
 
             let mut public_origin = format!("http://127.0.0.1:{}", cfg.gateway.local_port);
             let mut _cf_tunnel = None;
             let mut _ssh_tunnel = None;
 
-            if cfg.connection_mode == "vps" || cfg.connection_mode == "vps-ssh" {
+            if is_vps {
                 let mut forwards = vec![
                     (cfg.vps.remote_fs_port, cfg.local_ports.fs_bearer),
                     (cfg.vps.remote_workbench_port, cfg.local_ports.workbench),
@@ -470,7 +497,6 @@ async fn main() -> Result<()> {
                         .trim_start_matches("http://")
                         .trim_end_matches('/');
                     public_origin = format!("https://{dom}");
-                    gw_handle.set_issuer(&public_origin);
                 }
                 _ssh_tunnel = Some(st);
             } else if let Some(cf_exe) = cloudflared {
@@ -488,7 +514,9 @@ async fn main() -> Result<()> {
                 })
                 .await?;
                 public_origin = t.public_url.clone();
-                gw_handle.set_issuer(&public_origin);
+                if let Some((_, _, ref gw_handle)) = local_gw {
+                    gw_handle.set_issuer(&public_origin);
+                }
                 info!("Public MCP URL: {}{}", public_origin, mcp_path);
                 _cf_tunnel = Some(t);
             }
@@ -509,8 +537,12 @@ async fn main() -> Result<()> {
                         detail: format!("127.0.0.1:{}", cfg.local_ports.workbench),
                     },
                     gateway: ServiceHealth {
-                        ok: true,
-                        detail: format!("127.0.0.1:{}", cfg.gateway.local_port),
+                        ok: !is_vps,
+                        detail: if is_vps {
+                            "remote on VPS".into()
+                        } else {
+                            format!("127.0.0.1:{}", cfg.gateway.local_port)
+                        },
                     },
                     chrome_mcp: ServiceHealth {
                         ok: chrome_ok,
@@ -523,9 +555,12 @@ async fn main() -> Result<()> {
                 },
             );
 
-            let gw_listener = TcpListener::bind(gw_addr).await?;
             let gw_fut = async move {
-                axum::serve(gw_listener, gw_router).await?;
+                if let Some((gw_listener, gw_router, _)) = local_gw {
+                    axum::serve(gw_listener, gw_router).await?;
+                } else {
+                    std::future::pending::<()>().await;
+                }
                 Ok::<(), anyhow::Error>(())
             };
 

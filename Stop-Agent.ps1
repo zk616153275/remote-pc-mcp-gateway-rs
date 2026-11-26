@@ -3,10 +3,21 @@
 $ErrorActionPreference = 'SilentlyContinue'
 $repoRoot = $PSScriptRoot
 
-$ports = @(18849, 18623, 18619)
+$ports = [System.Collections.Generic.HashSet[int]]::new()
+foreach ($p in @(18849, 18623, 18619, 18787)) { [void]$ports.Add($p) }
+$configFile = Join-Path $repoRoot 'config\config.local.json'
+if (Test-Path $configFile) {
+    try {
+        $cfg = Get-Content -Raw $configFile | ConvertFrom-Json
+        if ($cfg.localPorts.fsBearer) { [void]$ports.Add([int]$cfg.localPorts.fsBearer) }
+        if ($cfg.localPorts.workbench) { [void]$ports.Add([int]$cfg.localPorts.workbench) }
+        if ($cfg.localPorts.chromeMcp) { [void]$ports.Add([int]$cfg.localPorts.chromeMcp) }
+        if ($cfg.gateway.localPort) { [void]$ports.Add([int]$cfg.gateway.localPort) }
+    } catch {}
+}
 $targetPids = [System.Collections.Generic.HashSet[int]]::new()
 
-foreach ($conn in @(Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in $ports })) {
+foreach ($conn in @(Get-NetTCPConnection -State Listen | Where-Object { $ports.Contains([int]$_.LocalPort) })) {
     if ($conn.OwningProcess -gt 0) {
         [void]$targetPids.Add([int]$conn.OwningProcess)
     }
@@ -36,10 +47,10 @@ foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name='rpc-mcp.exe'"))
     }
 }
 
-# Stop only verified ssh tunnel process (check ProcessName is actually 'ssh')
+# Stop only verified ssh / cloudflared tunnel process
 if ($recordedSshPid) {
-    $sshProc = Get-Process -Id $recordedSshPid -ErrorAction SilentlyContinue
-    if ($sshProc -and $sshProc.ProcessName -eq 'ssh') {
+    $tunnelProc = Get-Process -Id $recordedSshPid -ErrorAction SilentlyContinue
+    if ($tunnelProc -and ($tunnelProc.ProcessName -in @('ssh', 'cloudflared'))) {
         Stop-Process -Id $recordedSshPid -Force
     }
 }
@@ -50,7 +61,7 @@ foreach ($id in $targetPids) {
     if ($wmi -and ([string]$wmi.CommandLine -match '\bjob-runner\b')) {
         continue
     }
-    if ($wmi -and ($wmi.Name -in @('rpc-mcp.exe', 'node.exe', 'ssh.exe'))) {
+    if ($wmi -and ($wmi.Name -in @('rpc-mcp.exe', 'node.exe', 'ssh.exe', 'cloudflared.exe'))) {
         Stop-Process -Id $id -Force
     }
 }
