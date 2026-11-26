@@ -131,11 +131,7 @@ fn contains_host_bounded(cmdline: &str, host: &str) -> bool {
 /// Pure matching predicate (also mirrored in the PowerShell cleanup script) verifying
 /// that a command line belongs to *this* gateway's reverse tunnel for `host` and at
 /// least one of its configured remote forward ports.
-pub fn matches_stale_tunnel_cmdline(
-    cmdline: &str,
-    host: &str,
-    port_tokens: &[String],
-) -> bool {
+pub fn matches_stale_tunnel_cmdline(cmdline: &str, host: &str, port_tokens: &[String]) -> bool {
     let host = host.trim();
     if host.is_empty() || port_tokens.is_empty() {
         return false;
@@ -189,7 +185,9 @@ pub fn build_ssh_args(opts: &SshTunnelOptions) -> Vec<String> {
 }
 
 pub fn next_backoff_secs(current: u64) -> u64 {
-    current.saturating_mul(2).clamp(INITIAL_BACKOFF_SECS, MAX_BACKOFF_SECS)
+    current
+        .saturating_mul(2)
+        .clamp(INITIAL_BACKOFF_SECS, MAX_BACKOFF_SECS)
 }
 
 #[cfg(windows)]
@@ -451,7 +449,8 @@ pub fn start_ssh_reverse_tunnel(opts: &SshTunnelOptions) -> Result<SshTunnelSupe
                 format!("{exit_desc} ({detail})")
             };
 
-            if promoted_connected && started_at.elapsed() >= Duration::from_secs(HEALTHY_RESET_SECS) {
+            if promoted_connected && started_at.elapsed() >= Duration::from_secs(HEALTHY_RESET_SECS)
+            {
                 backoff_secs = INITIAL_BACKOFF_SECS;
             }
 
@@ -516,22 +515,47 @@ mod tests {
         assert!(args.contains(&"TCPKeepAlive=yes".to_string()));
         assert!(args.contains(&"127.0.0.1:27618:127.0.0.1:18849".to_string()));
         assert!(args.contains(&"127.0.0.1:27623:127.0.0.1:18623".to_string()));
-        assert_eq!(args.last().map(String::as_str), Some("tunnel@vps.example.com"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("tunnel@vps.example.com")
+        );
     }
 
     #[test]
     fn matches_only_this_gateways_tunnel_processes() {
         let tokens = build_forward_port_tokens(&[(27618, 18849), (27623, 18623)]);
         let own_cmd = r#"C:\Windows\System32\OpenSSH\ssh.exe -N -T -p 22 -R 127.0.0.1:27618:127.0.0.1:18849 -R 127.0.0.1:27623:127.0.0.1:18623 root@203.0.113.10"#;
-        let same_host_other_app = r#"ssh.exe -N -R 127.0.0.1:9999:127.0.0.1:3000 root@203.0.113.10"#;
-        let other_host_same_port = r#"ssh.exe -N -R 127.0.0.1:27618:127.0.0.1:18849 root@198.51.100.20"#;
+        let same_host_other_app =
+            r#"ssh.exe -N -R 127.0.0.1:9999:127.0.0.1:3000 root@203.0.113.10"#;
+        let other_host_same_port =
+            r#"ssh.exe -N -R 127.0.0.1:27618:127.0.0.1:18849 root@198.51.100.20"#;
         let interactive_ssh = r#"ssh.exe root@203.0.113.10"#;
 
-        assert!(matches_stale_tunnel_cmdline(own_cmd, "203.0.113.10", &tokens));
-        assert!(!matches_stale_tunnel_cmdline(own_cmd, "203.0.113.1", &tokens));
-        assert!(!matches_stale_tunnel_cmdline(same_host_other_app, "203.0.113.10", &tokens));
-        assert!(!matches_stale_tunnel_cmdline(other_host_same_port, "203.0.113.10", &tokens));
-        assert!(!matches_stale_tunnel_cmdline(interactive_ssh, "203.0.113.10", &tokens));
+        assert!(matches_stale_tunnel_cmdline(
+            own_cmd,
+            "203.0.113.10",
+            &tokens
+        ));
+        assert!(!matches_stale_tunnel_cmdline(
+            own_cmd,
+            "203.0.113.1",
+            &tokens
+        ));
+        assert!(!matches_stale_tunnel_cmdline(
+            same_host_other_app,
+            "203.0.113.10",
+            &tokens
+        ));
+        assert!(!matches_stale_tunnel_cmdline(
+            other_host_same_port,
+            "203.0.113.10",
+            &tokens
+        ));
+        assert!(!matches_stale_tunnel_cmdline(
+            interactive_ssh,
+            "203.0.113.10",
+            &tokens
+        ));
     }
 
     #[test]

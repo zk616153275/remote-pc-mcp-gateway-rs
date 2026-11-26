@@ -24,18 +24,36 @@ fn danger_rules() -> &'static [Rule] {
     static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
     RULES.get_or_init(|| {
         [
-            (r"(?i)\brm\s+(?:-[a-z]*\s+)*-{1,2}[a-z]*r[a-z]*\b", "rm -r/-rf"),
+            (
+                r"(?i)\brm\s+(?:-[a-z]*\s+)*-{1,2}[a-z]*r[a-z]*\b",
+                "rm -r/-rf",
+            ),
             (r"(?i)\brm\s+-[a-z]*f[a-z]*r[a-z]*\b", "rm -fr"),
-            (r"(?i)\b(?:Remove-Item|ri|del|erase)\b[^\r\n|;]*-(?:Recurse|Force|r|fo)\b", "Remove-Item -Recurse/-Force"),
+            (
+                r"(?i)\b(?:Remove-Item|ri|del|erase)\b[^\r\n|;]*-(?:Recurse|Force|r|fo)\b",
+                "Remove-Item -Recurse/-Force",
+            ),
             (r"(?i)\brmdir\s+/s\b", "rmdir /s"),
             (r"(?i)\brd\s+/s\b", "rd /s"),
             (r"(?i)\bdel\s+/[sq]\b", "del /s|/q"),
-            (r"(?i)\[System\.IO\.Directory\]::Delete", "Directory::Delete"),
+            (
+                r"(?i)\[System\.IO\.Directory\]::Delete",
+                "Directory::Delete",
+            ),
             (r"(?i)shutil\.rmtree", "shutil.rmtree"),
-            (r"(?i)git\s+(?:-C\s+\S+\s+)?reset\s+--hard", "git reset --hard"),
-            (r"(?i)git\s+(?:-C\s+\S+\s+)?clean\s+-[a-z]*f", "git clean -f"),
+            (
+                r"(?i)git\s+(?:-C\s+\S+\s+)?reset\s+--hard",
+                "git reset --hard",
+            ),
+            (
+                r"(?i)git\s+(?:-C\s+\S+\s+)?clean\s+-[a-z]*f",
+                "git clean -f",
+            ),
             (r"(?i)git\s+(?:-C\s+\S+\s+)?restore\b", "git restore"),
-            (r"(?i)git\s+(?:-C\s+\S+\s+)?checkout\s+--\s", "git checkout -- "),
+            (
+                r"(?i)git\s+(?:-C\s+\S+\s+)?checkout\s+--\s",
+                "git checkout -- ",
+            ),
         ]
         .into_iter()
         .map(|(pat, label)| Rule {
@@ -51,8 +69,14 @@ fn bulk_rules() -> &'static [Rule] {
     RULES.get_or_init(|| {
         [
             (r"(?i)-SkipLast\b", "-SkipLast"),
-            (r"(?i)Get-ChildItem[^\r\n]*\|[^\r\n]*Remove-Item", "Get-ChildItem | Remove-Item"),
-            (r"(?i)Sort-Object[^\r\n]*\|[^\r\n]*Remove-Item", "Sort-Object | Remove-Item"),
+            (
+                r"(?i)Get-ChildItem[^\r\n]*\|[^\r\n]*Remove-Item",
+                "Get-ChildItem | Remove-Item",
+            ),
+            (
+                r"(?i)Sort-Object[^\r\n]*\|[^\r\n]*Remove-Item",
+                "Sort-Object | Remove-Item",
+            ),
             (r"\*", "Wildcard *"),
         ]
         .into_iter()
@@ -67,8 +91,15 @@ fn bulk_rules() -> &'static [Rule] {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuardDecision {
     Allow,
-    AllowConfirmedOnce { fingerprint: String, matched: Vec<String> },
-    BlockFirstAttempt { fingerprint: String, matched: Vec<String>, message: String },
+    AllowConfirmedOnce {
+        fingerprint: String,
+        matched: Vec<String>,
+    },
+    BlockFirstAttempt {
+        fingerprint: String,
+        matched: Vec<String>,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]

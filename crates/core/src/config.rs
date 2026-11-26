@@ -194,7 +194,13 @@ mod tests {
         assert_eq!(cfg.cloudflare.named_tunnel_token, "tok-cf");
         assert_eq!(cfg.vps.host, "203.0.113.10");
         assert_eq!(cfg.vps.ssh_port, 2222);
-        assert_eq!(cfg.vps.extra.get("destRoot").and_then(Value::as_str), Some("/opt/isolated"));
-        assert_eq!(cfg.extra.get("customFlag").and_then(Value::as_i64), Some(42));
+        assert_eq!(
+            cfg.vps.extra.get("destRoot").and_then(Value::as_str),
+            Some("/opt/isolated")
+        );
+        assert_eq!(
+            cfg.extra.get("customFlag").and_then(Value::as_i64),
+            Some(42)
+        );
     }
 }

@@ -6,8 +6,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use rpc_mcp_core::audit::{full_target, summarize_target, AuditLog, AuditMeta};
-use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use rpc_mcp_core::path_guard::AllowedRoots;
+use rpc_mcp_core::{constant_time_eq, extract_bearer_token};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -57,12 +57,13 @@ async fn healthz(State(state): State<Arc<FsState>>) -> impl IntoResponse {
     )
 }
 
-async fn mcp_delete(
-    State(state): State<Arc<FsState>>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn mcp_delete(State(state): State<Arc<FsState>>, headers: HeaderMap) -> impl IntoResponse {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "ok": false, "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "ok": false, "error": "unauthorized" })),
+        )
+            .into_response();
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -100,7 +101,9 @@ async fn mcp_post(
                 .pointer("/params/protocolVersion")
                 .and_then(Value::as_str)
                 .unwrap_or("2025-06-18");
-            let sid = session_id.get_or_insert_with(|| Uuid::new_v4().to_string()).clone();
+            let sid = session_id
+                .get_or_insert_with(|| Uuid::new_v4().to_string())
+                .clone();
             let _ = sid;
             json!({
                 "jsonrpc": "2.0",
@@ -132,9 +135,7 @@ async fn mcp_post(
                 headers.get("x-mcp-owner").and_then(|v| v.to_str().ok()),
                 headers.get("x-mcp-tool").and_then(|v| v.to_str().ok()),
             );
-            let tool_name = meta
-                .tool_override
-                .unwrap_or_else(|| format!("fs_{name}"));
+            let tool_name = meta.tool_override.unwrap_or_else(|| format!("fs_{name}"));
             let target = summarize_target(&args);
             let full = full_target(&args);
             state.audit.record(

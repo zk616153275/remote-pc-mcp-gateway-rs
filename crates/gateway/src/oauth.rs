@@ -144,8 +144,7 @@ fn is_valid_redirect_uri(value: &str) -> bool {
     let Ok(url) = Url::parse(value) else {
         return false;
     };
-    url.scheme() == "https"
-        || matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+    url.scheme() == "https" || matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
 }
 
 fn is_google_redirect_uri(value: &str) -> bool {
@@ -340,7 +339,10 @@ impl OAuthService {
     }
 
     pub fn challenge_header(&self) -> String {
-        format!("Bearer resource_metadata=\"{}\"", self.resource_metadata_url())
+        format!(
+            "Bearer resource_metadata=\"{}\"",
+            self.resource_metadata_url()
+        )
     }
 
     fn persist_clients(&self, clients: &HashMap<String, ClientRecord>) {
@@ -612,13 +614,8 @@ impl OAuthService {
         .collect();
 
         if !is_post {
-            let html = render_consent_html(
-                app_label,
-                &self.cfg.instance_label,
-                &hidden,
-                is_zh,
-                None,
-            );
+            let html =
+                render_consent_html(app_label, &self.cfg.instance_label, &hidden, is_zh, None);
             return (
                 StatusCode::OK,
                 [
@@ -665,14 +662,12 @@ impl OAuthService {
             }
         }
 
-        let submitted = params
-            .get("approval_key")
-            .map(|s| s.trim())
-            .unwrap_or("");
+        let submitted = params.get("approval_key").map(|s| s.trim()).unwrap_or("");
         if !constant_time_eq(submitted, &self.cfg.approval_key) {
             {
                 let mut fails_map = self.failed_approvals.lock().unwrap();
-                if fails_map.len() < AUTH_MAX_TRACKED_CLIENTS || fails_map.contains_key(&client_id) {
+                if fails_map.len() < AUTH_MAX_TRACKED_CLIENTS || fails_map.contains_key(&client_id)
+                {
                     fails_map.entry(client_id.clone()).or_default().push(now);
                 }
             }
@@ -720,7 +715,11 @@ impl OAuthService {
         }
 
         let Ok(mut dest) = Url::parse(&redirect_uri) else {
-            return err_resp(StatusCode::BAD_REQUEST, "invalid_request", Some("invalid redirect_uri"));
+            return err_resp(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                Some("invalid redirect_uri"),
+            );
         };
         {
             let mut qp = dest.query_pairs_mut();
@@ -731,7 +730,11 @@ impl OAuthService {
         }
 
         let Ok(loc_val) = HeaderValue::from_str(dest.as_str()) else {
-            return err_resp(StatusCode::BAD_REQUEST, "invalid_request", Some("invalid redirect location"));
+            return err_resp(
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                Some("invalid redirect location"),
+            );
         };
         let mut resp = StatusCode::FOUND.into_response();
         resp.headers_mut().insert("location", loc_val);
@@ -798,7 +801,10 @@ impl OAuthService {
                     }
                 }
 
-                let verifier = params.get("code_verifier").map(String::as_str).unwrap_or("");
+                let verifier = params
+                    .get("code_verifier")
+                    .map(String::as_str)
+                    .unwrap_or("");
                 let expected_challenge = B64_URL.encode(Sha256::digest(verifier.as_bytes()));
                 let redir = params.get("redirect_uri").map(String::as_str).unwrap_or("");
                 if verifier.is_empty()
@@ -855,7 +861,10 @@ impl OAuthService {
             }
 
             "refresh_token" => {
-                let rt_val = params.get("refresh_token").map(String::as_str).unwrap_or("");
+                let rt_val = params
+                    .get("refresh_token")
+                    .map(String::as_str)
+                    .unwrap_or("");
                 let Some(claims) = self.verify_token(rt_val, "rmcpr") else {
                     return err_resp(
                         StatusCode::BAD_REQUEST,
@@ -863,9 +872,7 @@ impl OAuthService {
                         Some("invalid or expired refresh_token"),
                     );
                 };
-                if claims.typ != "rt"
-                    || (!client_id.is_empty() && client_id != claims.client_id)
-                {
+                if claims.typ != "rt" || (!client_id.is_empty() && client_id != claims.client_id) {
                     return err_resp(StatusCode::BAD_REQUEST, "invalid_grant", None);
                 }
                 {

@@ -374,7 +374,11 @@ mod win_impl {
         ports.into_iter().collect()
     }
 
-    fn spawn_drain(read_handle: HANDLE, stream: &'static str, log: Arc<Mutex<LogState>>) -> thread::JoinHandle<()> {
+    fn spawn_drain(
+        read_handle: HANDLE,
+        stream: &'static str,
+        log: Arc<Mutex<LogState>>,
+    ) -> thread::JoinHandle<()> {
         let raw_usize = read_handle as usize;
         thread::spawn(move || {
             let mut file = unsafe { fs::File::from_raw_handle(raw_usize as RawHandle) };
@@ -458,8 +462,8 @@ mod win_impl {
             return Ok(4);
         }
 
-        let spec_raw = fs::read_to_string(dir.join("spec.json"))
-            .context("failed to read spec.json")?;
+        let spec_raw =
+            fs::read_to_string(dir.join("spec.json")).context("failed to read spec.json")?;
         let spec: CommandSpec = serde_json::from_str(&spec_raw)?;
         let started_at = Utc::now();
         let identity = SupervisorIdentity {
@@ -489,7 +493,9 @@ mod win_impl {
         } == 0
         {
             unsafe { CloseHandle(job) };
-            anyhow::bail!("SetInformationJobObject failed: {}", unsafe { GetLastError() });
+            anyhow::bail!("SetInformationJobObject failed: {}", unsafe {
+                GetLastError()
+            });
         }
 
         let sa = SECURITY_ATTRIBUTES {
@@ -701,7 +707,11 @@ mod win_impl {
             }
 
             let state = if finished {
-                if stopped { "stopped" } else { "exited" }
+                if stopped {
+                    "stopped"
+                } else {
+                    "exited"
+                }
             } else {
                 "running"
             };

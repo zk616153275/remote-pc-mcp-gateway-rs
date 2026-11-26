@@ -153,7 +153,10 @@ async fn e2e_agent_fs_workbench_job_runner_and_delete_guard() {
     .to_string();
     let (st, grep_body) = http_req(fs_port, "POST", "/mcp", Some("tok-fs"), Some(&grep_req)).await;
     assert_eq!(st, 200);
-    assert!(grep_body.contains("2:hello-rust-ripgrep"), "grep output: {grep_body}");
+    assert!(
+        grep_body.contains("2:hello-rust-ripgrep"),
+        "grep output: {grep_body}"
+    );
 
     // 4. Workbench /hook begin + run_command (detached Win32 job-runner)
     let hook_req = json!({
@@ -267,8 +270,7 @@ async fn e2e_agent_fs_workbench_job_runner_and_delete_guard() {
         }
     })
     .to_string();
-    let (st, stop_body) =
-        http_req(wb_port, "POST", "/mcp", Some("tok-wb"), Some(&stop_req)).await;
+    let (st, stop_body) = http_req(wb_port, "POST", "/mcp", Some("tok-wb"), Some(&stop_req)).await;
     assert_eq!(st, 200);
     let stop_json: Value = serde_json::from_str(&stop_body).unwrap();
     let stop_payload: Value =

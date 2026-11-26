@@ -63,11 +63,7 @@ fn is_under(child: &Path, root: &Path) -> bool {
     if c == r {
         return true;
     }
-    let prefix = if r.ends_with('/') {
-        r
-    } else {
-        format!("{r}/")
-    };
+    let prefix = if r.ends_with('/') { r } else { format!("{r}/") };
     c.starts_with(&prefix)
 }
 
@@ -279,9 +275,18 @@ mod tests {
 
     #[test]
     fn is_under_works_for_posix_and_windows_paths() {
-        assert!(is_under(Path::new("/tmp/workspace/a/b.txt"), Path::new("/tmp/workspace")));
-        assert!(!is_under(Path::new("/tmp/workspace2/a.txt"), Path::new("/tmp/workspace")));
-        assert!(is_under(Path::new(r"D:\ws\sub\file.rs"), Path::new(r"D:\ws")));
+        assert!(is_under(
+            Path::new("/tmp/workspace/a/b.txt"),
+            Path::new("/tmp/workspace")
+        ));
+        assert!(!is_under(
+            Path::new("/tmp/workspace2/a.txt"),
+            Path::new("/tmp/workspace")
+        ));
+        assert!(is_under(
+            Path::new(r"D:\ws\sub\file.rs"),
+            Path::new(r"D:\ws")
+        ));
         assert!(!is_under(Path::new(r"D:\ws2\file.rs"), Path::new(r"D:\ws")));
     }
 }

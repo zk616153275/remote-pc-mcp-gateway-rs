@@ -129,9 +129,7 @@ enum Commands {
     },
 
     /// Detached per-command Windows Job Object supervisor (invoked internally by workbench)
-    JobRunner {
-        dir: PathBuf,
-    },
+    JobRunner { dir: PathBuf },
 }
 
 fn resolve_pwsh(explicit: &str) -> String {
@@ -160,8 +158,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -183,8 +180,10 @@ async fn main() -> Result<()> {
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("state"));
-            let _instance_lock = InstanceLock::try_acquire(&state_base.join("agent.lock"), "agent")?;
-            let local_audit = audit_log.unwrap_or_else(|| state_base.join("logs").join("local-audit.jsonl"));
+            let _instance_lock =
+                InstanceLock::try_acquire(&state_base.join("agent.lock"), "agent")?;
+            let local_audit =
+                audit_log.unwrap_or_else(|| state_base.join("logs").join("local-audit.jsonl"));
 
             let file_cfg = match config {
                 Some(ref p) => AppConfig::load(p)?,
@@ -294,8 +293,7 @@ async fn main() -> Result<()> {
                 instance_label: instance_label.clone(),
                 oauth: OAuthConfig {
                     enabled: !disable_oauth,
-                    issuer: oauth_issuer
-                        .unwrap_or_else(|| format!("http://{host}:{listen_port}")),
+                    issuer: oauth_issuer.unwrap_or_else(|| format!("http://{host}:{listen_port}")),
                     mcp_path: String::new(),
                     signing_key: oauth_signing_key.unwrap_or(file_cfg.gateway.oauth_signing_key),
                     approval_key: oauth_approval_key.unwrap_or(file_cfg.gateway.approval_key),
@@ -325,9 +323,8 @@ async fn main() -> Result<()> {
             let mut cfg = ChromeBrokerConfig::default_npx(port, cdp_port);
             cfg.host = host;
             cfg.bearer_token = token.filter(|s| !s.is_empty());
-            cfg.audit_log = Some(
-                audit_log.unwrap_or_else(|| PathBuf::from("state/logs/local-audit.jsonl")),
-            );
+            cfg.audit_log =
+                Some(audit_log.unwrap_or_else(|| PathBuf::from("state/logs/local-audit.jsonl")));
             serve_chrome_broker(cfg).await?;
         }
 
@@ -346,9 +343,7 @@ async fn main() -> Result<()> {
             let is_vps = cfg.connection_mode == "vps" || cfg.connection_mode == "vps-ssh";
 
             if cfg.tokens.fs_token.is_empty() || cfg.tokens.workbench_token.is_empty() {
-                anyhow::bail!(
-                    "both tokens.fsToken and tokens.workbenchToken must be configured"
-                );
+                anyhow::bail!("both tokens.fsToken and tokens.workbenchToken must be configured");
             }
 
             let fs_cfg = FsServerConfig {
@@ -429,7 +424,11 @@ async fn main() -> Result<()> {
                 } else {
                     String::new()
                 },
-                chrome_token: if chrome_ok { chrome_token } else { String::new() },
+                chrome_token: if chrome_ok {
+                    chrome_token
+                } else {
+                    String::new()
+                },
                 workspace_root: cfg
                     .allowed_roots
                     .first()

@@ -348,7 +348,8 @@ fn read_text_with_bounds(
                     newlines += 1;
                     if newlines >= n {
                         let start = idx + 1;
-                        let mut final_bytes = Vec::with_capacity((chunk.len() - start) + collected.len());
+                        let mut final_bytes =
+                            Vec::with_capacity((chunk.len() - start) + collected.len());
                         final_bytes.extend_from_slice(&chunk[start..]);
                         final_bytes.extend_from_slice(&collected);
                         if final_bytes.len() as u64 > RESPONSE_LIMIT_BYTES {
@@ -754,7 +755,10 @@ fn call_tool_sync(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
                 last_shown,
                 total_lines
             );
-            ToolResult::text(truncate_output(format!("{header}{}", numbered.join("\n")), None))
+            ToolResult::text(truncate_output(
+                format!("{header}{}", numbered.join("\n")),
+                None,
+            ))
         }
 
         "get_file_info" => {
@@ -823,10 +827,7 @@ fn call_tool_sync(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
                 Ok(p) => p,
                 Err(e) => return ToolResult::error(e.to_string()),
             };
-            let dry_run = args
-                .get("dryRun")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+            let dry_run = args.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
             let edits: Vec<TextEdit> = match args
                 .get("edits")
                 .cloned()
@@ -887,14 +888,8 @@ fn call_tool_sync(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
                 Ok(v) => v,
                 Err(e) => return e,
             };
-            let start_line = args
-                .get("start_line")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as usize;
-            let end_line = args
-                .get("end_line")
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as usize;
+            let start_line = args.get("start_line").and_then(Value::as_u64).unwrap_or(0) as usize;
+            let end_line = args.get("end_line").and_then(Value::as_u64).unwrap_or(0) as usize;
             if start_line == 0 || end_line < start_line {
                 return ToolResult::error("invalid start_line/end_line range");
             }
@@ -911,7 +906,11 @@ fn call_tool_sync(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
                 Ok(s) => s,
                 Err(e) => return ToolResult::error(e.to_string()),
             };
-            let eol = if content.contains("\r\n") { "\r\n" } else { "\n" };
+            let eol = if content.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
             let mut lines: Vec<String> = content
                 .replace("\r\n", "\n")
                 .split('\n')
@@ -949,7 +948,9 @@ fn call_tool_sync(roots: &AllowedRoots, name: &str, args: Value) -> ToolResult {
                 Err(e) => return ToolResult::error(e.to_string()),
             };
             match fs::create_dir_all(&path) {
-                Ok(()) => ToolResult::text(format!("Successfully created directory {}", path.display())),
+                Ok(()) => {
+                    ToolResult::text(format!("Successfully created directory {}", path.display()))
+                }
                 Err(e) => ToolResult::error(e.to_string()),
             }
         }
@@ -1023,7 +1024,10 @@ mod tests {
         )
         .await;
         assert!(tail_res.is_error.is_none());
-        assert_eq!(tail_res.content[0]["text"].as_str().unwrap(), "beta-rust-mcp\ngamma");
+        assert_eq!(
+            tail_res.content[0]["text"].as_str().unwrap(),
+            "beta-rust-mcp\ngamma"
+        );
 
         let escape = call_tool(
             &roots,

@@ -105,7 +105,9 @@ pub async fn run_inspect_image(
     let path: PathBuf = match AllowedRoots::new(allowed_roots) {
         Ok(guard) => match guard.validate(raw_path) {
             Ok(p) => p,
-            Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+            Err(e) => {
+                return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] })
+            }
         },
         Err(_) => PathBuf::from(raw_path),
     };
@@ -132,8 +134,12 @@ pub async fn run_inspect_image(
     }
     let bytes = match tokio::fs::read(&path).await {
         Ok(b) if !b.is_empty() => b,
-        Ok(_) => return json!({ "isError": true, "content": [{ "type": "text", "text": "image file is empty" }] }),
-        Err(e) => return json!({ "isError": true, "content": [{ "type": "text", "text": format!("failed to read image: {e}") }] }),
+        Ok(_) => {
+            return json!({ "isError": true, "content": [{ "type": "text", "text": "image file is empty" }] })
+        }
+        Err(e) => {
+            return json!({ "isError": true, "content": [{ "type": "text", "text": format!("failed to read image: {e}") }] })
+        }
     };
     let custom_prompt = args
         .get("prompt")
@@ -147,8 +153,8 @@ pub async fn run_inspect_image(
     };
     let b64 = B64_STD.encode(&bytes);
 
-    let use_gemini = cfg.mode == "gemini-api"
-        || (cfg.mode == "auto" && !cfg.gemini_api_key.is_empty());
+    let use_gemini =
+        cfg.mode == "gemini-api" || (cfg.mode == "auto" && !cfg.gemini_api_key.is_empty());
 
     let res = if use_gemini {
         let url = format!(
@@ -168,7 +174,10 @@ pub async fn run_inspect_image(
             .send()
             .await
     } else {
-        let url = format!("{}/chat/completions", cfg.openai_base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            cfg.openai_base_url.trim_end_matches('/')
+        );
         http.post(&url)
             .bearer_auth(&cfg.openai_api_key)
             .json(&json!({

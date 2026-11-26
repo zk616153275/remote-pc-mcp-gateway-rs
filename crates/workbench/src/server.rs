@@ -127,11 +127,15 @@ impl WorkbenchEngine {
     }
 
     fn session_file(&self, key: &str) -> PathBuf {
-        self.root.join("sessions").join(format!("s_{}.json", &key[..32]))
+        self.root
+            .join("sessions")
+            .join(format!("s_{}.json", &key[..32]))
     }
 
     fn context_file(&self, context_id: &str) -> PathBuf {
-        self.root.join("contexts").join(format!("{context_id}.json"))
+        self.root
+            .join("contexts")
+            .join(format!("{context_id}.json"))
     }
 
     fn task_file(&self, task_id: &str) -> PathBuf {
@@ -155,16 +159,19 @@ impl WorkbenchEngine {
 
     pub fn hook(&self, body: &Value) -> Result<Value> {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let phase = body.get("phase").and_then(Value::as_str).unwrap_or("lookup");
-        let agent = body.get("agent").and_then(Value::as_str).unwrap_or("mcp-gateway");
+        let phase = body
+            .get("phase")
+            .and_then(Value::as_str)
+            .unwrap_or("lookup");
+        let agent = body
+            .get("agent")
+            .and_then(Value::as_str)
+            .unwrap_or("mcp-gateway");
         let session_id = body
             .get("sessionId")
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow::anyhow!("sessionId is required"))?;
-        let turn_id = body
-            .get("turnId")
-            .and_then(Value::as_str)
-            .unwrap_or("turn");
+        let turn_id = body.get("turnId").and_then(Value::as_str).unwrap_or("turn");
         let session_key = sha256_hex(&format!("{agent}:{session_id}"));
         let s_file = self.session_file(&session_key);
 
@@ -173,7 +180,9 @@ impl WorkbenchEngine {
                 if let Some(mut existing) = self.read_json::<SessionRecord>(&s_file) {
                     existing.turn_id = turn_id.to_string();
                     self.write_json(&s_file, &existing)?;
-                    return Ok(json!({ "contextId": existing.context_id, "taskId": existing.task_id }));
+                    return Ok(
+                        json!({ "contextId": existing.context_id, "taskId": existing.task_id }),
+                    );
                 }
                 let context_id = format!("x_{}", &sha256_hex(&format!("ctx:{session_key}"))[..32]);
                 let task_id = format!("t_{}", &sha256_hex(&format!("task:{session_key}"))[..32]);
@@ -215,14 +224,25 @@ impl WorkbenchEngine {
                     .map(|arr| {
                         arr.iter().any(|c| {
                             let st = c["state"].as_str().unwrap_or("");
-                            let procs = c["processes"].as_array().map(|p| !p.is_empty()).unwrap_or(false);
-                            let ports = c["ports"].as_array().map(|p| !p.is_empty()).unwrap_or(false);
-                            !is_terminal(st) || procs || ports || c["timedOut"].as_bool().unwrap_or(false)
+                            let procs = c["processes"]
+                                .as_array()
+                                .map(|p| !p.is_empty())
+                                .unwrap_or(false);
+                            let ports = c["ports"]
+                                .as_array()
+                                .map(|p| !p.is_empty())
+                                .unwrap_or(false);
+                            !is_terminal(st)
+                                || procs
+                                || ports
+                                || c["timedOut"].as_bool().unwrap_or(false)
                         })
                     })
                     .unwrap_or(false);
                 if !any_active {
-                    if let Some(mut task) = self.read_json::<TaskRecord>(&self.task_file(&existing.task_id)) {
+                    if let Some(mut task) =
+                        self.read_json::<TaskRecord>(&self.task_file(&existing.task_id))
+                    {
                         task.reviewed_revision = task_view["revision"].as_str().map(String::from);
                         let _ = self.write_json(&self.task_file(&existing.task_id), &task);
                     }
@@ -490,7 +510,8 @@ impl WorkbenchEngine {
                             task.name = tn.to_string();
                         }
                     }
-                    if let Some(existing) = task.commands.iter().find(|c| c.request_id == request_id)
+                    if let Some(existing) =
+                        task.commands.iter().find(|c| c.request_id == request_id)
                     {
                         existing.command_id.clone()
                     } else {
@@ -520,8 +541,8 @@ impl WorkbenchEngine {
                 };
 
                 if wait_ms > 0 {
-                    let deadline = tokio::time::Instant::now()
-                        + std::time::Duration::from_millis(wait_ms);
+                    let deadline =
+                        tokio::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
                     loop {
                         let st = self.read_command_state(&command_id);
                         if is_terminal(st["state"].as_str().unwrap_or("")) {
@@ -566,7 +587,10 @@ impl WorkbenchEngine {
                     .filter(|s| is_safe_id(s))
                     .ok_or_else(|| anyhow::anyhow!("valid commandId is required"))?;
                 let offset = args["offset"].as_u64().unwrap_or(0);
-                let max_bytes = args["maxBytes"].as_u64().unwrap_or(65536).clamp(1024, 65536) as usize;
+                let max_bytes = args["maxBytes"]
+                    .as_u64()
+                    .unwrap_or(65536)
+                    .clamp(1024, 65536) as usize;
                 let wait_ms = args["waitMs"].as_u64().unwrap_or(0).min(15_000);
                 let want_entries = args["entries"].as_bool().unwrap_or(false);
 
@@ -594,8 +618,7 @@ impl WorkbenchEngine {
                         &dir.join("stop.json"),
                         &json!({ "requestedAt": Utc::now().to_rfc3339() }).to_string(),
                     )?;
-                    let deadline =
-                        tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+                    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
                     while tokio::time::Instant::now() < deadline {
                         let st = self.read_command_state(command_id);
                         if is_terminal(st["state"].as_str().unwrap_or(""))
@@ -710,24 +733,40 @@ async fn handle_hook(
     Json(body): Json<Value>,
 ) -> Response {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
     match state.engine.hook(&body) {
         Ok(val) => (StatusCode::OK, Json(val)).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
 async fn handle_prune(State(state): State<Arc<WbState>>, headers: HeaderMap) -> Response {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
     (StatusCode::OK, Json(state.engine.prune())).into_response()
 }
 
 async fn handle_mcp_delete(State(state): State<Arc<WbState>>, headers: HeaderMap) -> Response {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -738,7 +777,11 @@ async fn handle_mcp_or_panel(
     Json(body): Json<Value>,
 ) -> Response {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
     let Some(id) = body.get("id").cloned() else {
         return StatusCode::ACCEPTED.into_response();
@@ -769,7 +812,10 @@ async fn handle_mcp_or_panel(
             }
         }),
         "tools/call" => {
-            let name = body.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
+            let name = body
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let args = body
                 .pointer("/params/arguments")
                 .cloned()
@@ -934,8 +980,14 @@ mod tests {
         fs::create_dir_all(&cdir).unwrap();
 
         let big_payload = "A".repeat(2500);
-        let line1 = format!("{}\n", json!({ "at": "2026-01-01T00:00:00Z", "stream": "stdout", "text": big_payload }));
-        let line2 = format!("{}\n", json!({ "at": "2026-01-01T00:00:01Z", "stream": "stdout", "text": "tail" }));
+        let line1 = format!(
+            "{}\n",
+            json!({ "at": "2026-01-01T00:00:00Z", "stream": "stdout", "text": big_payload })
+        );
+        let line2 = format!(
+            "{}\n",
+            json!({ "at": "2026-01-01T00:00:01Z", "stream": "stdout", "text": "tail" })
+        );
         fs::write(cdir.join("output.jsonl"), format!("{line1}{line2}")).unwrap();
 
         // max_bytes=1024 is smaller than line1 (>2500 bytes); must still advance offset without stalling

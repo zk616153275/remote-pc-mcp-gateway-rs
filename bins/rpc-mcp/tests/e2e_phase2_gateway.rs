@@ -150,7 +150,10 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         .post(format!("{base}/oauth/authorize"))
         .form(&[
             ("client_id", client_id.as_str()),
-            ("redirect_uri", "https://oauth-redirect.googleusercontent.com/r/demo"),
+            (
+                "redirect_uri",
+                "https://oauth-redirect.googleusercontent.com/r/demo",
+            ),
             ("response_type", "code"),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
@@ -167,7 +170,10 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         .post(format!("{base}/oauth/authorize"))
         .form(&[
             ("client_id", client_id.as_str()),
-            ("redirect_uri", "https://oauth-redirect.googleusercontent.com/r/demo"),
+            (
+                "redirect_uri",
+                "https://oauth-redirect.googleusercontent.com/r/demo",
+            ),
             ("response_type", "code"),
             ("code_challenge", challenge.as_str()),
             ("code_challenge_method", "S256"),
@@ -194,7 +200,10 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
             ("client_id", client_id.as_str()),
-            ("redirect_uri", "https://oauth-redirect.googleusercontent.com/r/demo"),
+            (
+                "redirect_uri",
+                "https://oauth-redirect.googleusercontent.com/r/demo",
+            ),
             ("code_verifier", verifier),
         ])
         .send()
@@ -332,7 +341,12 @@ async fn e2e_oauth21_pkce_dcr_dual_platform_gateway_and_dynamic_issuer() {
         .send()
         .await
         .unwrap();
-    let conf_loc = conf_auth.headers().get("location").unwrap().to_str().unwrap();
+    let conf_loc = conf_auth
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap();
     let conf_code = Url::parse(conf_loc)
         .unwrap()
         .query_pairs()

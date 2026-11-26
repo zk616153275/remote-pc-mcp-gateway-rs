@@ -126,9 +126,18 @@ mod tests {
 
     #[test]
     fn allows_readonly_and_blocks_mutating_or_metachar_git_args() {
-        assert!(validate_readonly_git_args(&["-n".into(), "10".into(), "--oneline".into()]).is_ok());
-        assert!(validate_readonly_git_args(&["--grep=/api/v1".into(), "--format=%H/%s".into()]).is_ok());
-        assert!(validate_readonly_git_args(&["HEAD~3..HEAD".into(), "--".into(), "src/main.rs".into()]).is_ok());
+        assert!(
+            validate_readonly_git_args(&["-n".into(), "10".into(), "--oneline".into()]).is_ok()
+        );
+        assert!(
+            validate_readonly_git_args(&["--grep=/api/v1".into(), "--format=%H/%s".into()]).is_ok()
+        );
+        assert!(validate_readonly_git_args(&[
+            "HEAD~3..HEAD".into(),
+            "--".into(),
+            "src/main.rs".into()
+        ])
+        .is_ok());
         assert_eq!(
             validate_readonly_git_args(&["reset".into(), "--hard".into()]),
             Err(GitPolicyError::BlockedToken("reset".into()))

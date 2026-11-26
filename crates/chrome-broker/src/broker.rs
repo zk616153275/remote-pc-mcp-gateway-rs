@@ -275,12 +275,10 @@ impl SidecarBackend {
                 if let Some(id) = msg.get("id").and_then(Value::as_u64) {
                     if let Some(tx) = pending_reader.lock().await.remove(&id) {
                         if let Some(err) = msg.get("error") {
-                            let _ = tx.send(Err(
-                                err["message"]
-                                    .as_str()
-                                    .unwrap_or("Chrome sidecar error")
-                                    .to_string(),
-                            ));
+                            let _ = tx.send(Err(err["message"]
+                                .as_str()
+                                .unwrap_or("Chrome sidecar error")
+                                .to_string()));
                         } else {
                             let _ = tx.send(Ok(msg.get("result").cloned().unwrap_or(Value::Null)));
                         }
@@ -440,7 +438,11 @@ async fn healthz(State(state): State<Arc<BrokerState>>) -> impl IntoResponse {
 
 async fn mcp_delete(State(state): State<Arc<BrokerState>>, headers: HeaderMap) -> Response {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -451,7 +453,11 @@ async fn mcp_post(
     Json(payload): Json<Value>,
 ) -> Response {
     if !check_auth(&headers, &state.cfg.bearer_token) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response();
     }
 
     let id = payload.get("id").cloned();
@@ -504,8 +510,14 @@ async fn mcp_post(
                     }
                 })
             } else {
-                let raw_name = params.get("name").and_then(Value::as_str).unwrap_or("unknown");
-                let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                let raw_name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
                 if let Some(ref roots) = state.cfg.allowed_roots {
                     if let Some(fp) = args
                         .get("filePath")
@@ -610,7 +622,10 @@ mod tests {
             extract_jsonrpc_id_fast(r#"{"jsonrpc":"2.0","id":42,"result":{"data":"x"}}"#),
             Some(42)
         );
-        let big = format!(r#"{{"jsonrpc":"2.0","result":"{}","id": 98765}}"#, "x".repeat(10_000));
+        let big = format!(
+            r#"{{"jsonrpc":"2.0","result":"{}","id": 98765}}"#,
+            "x".repeat(10_000)
+        );
         assert_eq!(extract_jsonrpc_id_fast(&big), Some(98765));
     }
 }

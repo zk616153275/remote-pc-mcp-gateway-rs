@@ -41,10 +41,7 @@ impl ServiceLanes {
             "cmd"
         } else if matches!(
             name,
-            "fs_directory_tree"
-                | "fs_directory_tree_limited"
-                | "fs_search_files"
-                | "fs_grep_files"
+            "fs_directory_tree" | "fs_directory_tree_limited" | "fs_search_files" | "fs_grep_files"
         ) {
             "discovery"
         } else {
@@ -85,7 +82,10 @@ mod tests {
     fn routes_tools_to_expected_lanes() {
         assert_eq!(ServiceLanes::lane_for_tool("wait"), "wait");
         assert_eq!(ServiceLanes::lane_for_tool("fs_grep_files"), "discovery");
-        assert_eq!(ServiceLanes::lane_for_tool("fs_directory_tree"), "discovery");
+        assert_eq!(
+            ServiceLanes::lane_for_tool("fs_directory_tree"),
+            "discovery"
+        );
         assert_eq!(ServiceLanes::lane_for_tool("fs_read_file"), "fs");
         assert_eq!(ServiceLanes::lane_for_tool("workbench_status"), "cmd");
         assert_eq!(ServiceLanes::lane_for_tool("run_command"), "cmd");

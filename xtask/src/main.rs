@@ -13,7 +13,8 @@ struct TargetSpec {
 const GUI_SPEC: TargetSpec = TargetSpec {
     exe_stem: "rpc-mcp-gui",
     cargo_args: &["-p", "rpc-mcp-gui"],
-    restart_hint: "请右键右下角托盘图标 -> 点击「重启程序（加载最新版） / Restart App」切换到新版 GUI。",
+    restart_hint:
+        "请右键右下角托盘图标 -> 点击「重启程序（加载最新版） / Restart App」切换到新版 GUI。",
 };
 
 const AGENT_SPEC: TargetSpec = TargetSpec {
@@ -314,8 +315,14 @@ mod tests {
             "rpc-mcp-gui"
         ));
         assert!(!is_old_backup_for("rpc-mcp-gui.exe", "rpc-mcp-gui"));
-        assert!(!is_old_backup_for("rpc-mcp.20261126-140530.old.exe", "rpc-mcp-gui"));
-        assert!(!is_old_backup_for("rpc-mcp-gui.20261126-140530.old.exe", "rpc-mcp"));
+        assert!(!is_old_backup_for(
+            "rpc-mcp.20261126-140530.old.exe",
+            "rpc-mcp-gui"
+        ));
+        assert!(!is_old_backup_for(
+            "rpc-mcp-gui.20261126-140530.old.exe",
+            "rpc-mcp"
+        ));
     }
 
     #[test]

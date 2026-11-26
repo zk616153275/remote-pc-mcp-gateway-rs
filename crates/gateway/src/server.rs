@@ -129,10 +129,22 @@ fn ps_quote(value: &str) -> String {
 
 fn git_tools() -> Vec<Value> {
     let defs = [
-        ("git_status", "Read git status for the configured workspace. Read-only."),
-        ("git_diff", "Read git diff for the configured workspace. Read-only."),
-        ("git_log", "Read recent git history for the configured workspace. Read-only."),
-        ("git_show", "Read a git object or commit for the configured workspace. Read-only."),
+        (
+            "git_status",
+            "Read git status for the configured workspace. Read-only.",
+        ),
+        (
+            "git_diff",
+            "Read git diff for the configured workspace. Read-only.",
+        ),
+        (
+            "git_log",
+            "Read recent git history for the configured workspace. Read-only.",
+        ),
+        (
+            "git_show",
+            "Read a git object or commit for the configured workspace. Read-only.",
+        ),
     ];
     defs.into_iter()
         .map(|(name, desc)| {
@@ -274,12 +286,17 @@ impl GatewayState {
                 .filter(|d| !d.is_empty())
                 .filter_map(|d| serde_json::from_str::<Value>(d).ok())
                 .next_back()
-                .ok_or_else(|| anyhow::anyhow!("upstream SSE stream contained no JSON-RPC payload"))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("upstream SSE stream contained no JSON-RPC payload")
+                })?
         } else {
             serde_json::from_str(&raw_text)?
         };
         if let Some(err) = data.get("error") {
-            anyhow::bail!("{}", err["message"].as_str().unwrap_or("upstream RPC error"));
+            anyhow::bail!(
+                "{}",
+                err["message"].as_str().unwrap_or("upstream RPC error")
+            );
         }
         Ok(data.get("result").cloned().unwrap_or(Value::Null))
     }
@@ -297,7 +314,10 @@ impl GatewayState {
             .header("content-type", "application/json")
             .json(&payload);
         if !self.cfg.workbench_token.is_empty() {
-            req = req.header("authorization", format!("Bearer {}", self.cfg.workbench_token));
+            req = req.header(
+                "authorization",
+                format!("Bearer {}", self.cfg.workbench_token),
+            );
         }
         let resp = req.send().await?;
         let status = resp.status();
@@ -312,7 +332,13 @@ impl GatewayState {
         let mut all = Vec::new();
         let readwrite = self.cfg.mode.eq_ignore_ascii_case("readwrite");
 
-        let fs_fut = self.upstream_rpc(&self.cfg.fs_url, &self.cfg.fs_token, "tools/list", json!({}), None);
+        let fs_fut = self.upstream_rpc(
+            &self.cfg.fs_url,
+            &self.cfg.fs_token,
+            "tools/list",
+            json!({}),
+            None,
+        );
         let chrome_enabled = self.cfg.enable_chrome && !self.cfg.chrome_url.is_empty();
         let chrome_fut = async {
             if chrome_enabled {
@@ -361,7 +387,10 @@ impl GatewayState {
                 }
             }
             Err(e) => {
-                warn!("Failed to list upstream FS tools from {}: {e}", self.cfg.fs_url);
+                warn!(
+                    "Failed to list upstream FS tools from {}: {e}",
+                    self.cfg.fs_url
+                );
             }
         }
 
@@ -402,7 +431,10 @@ impl GatewayState {
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to list upstream Chrome tools from {}: {e}", self.cfg.chrome_url);
+                    warn!(
+                        "Failed to list upstream Chrome tools from {}: {e}",
+                        self.cfg.chrome_url
+                    );
                 }
             }
         }
@@ -599,8 +631,8 @@ impl GatewayState {
 
         if let Some(fs_tool) = name.strip_prefix("fs_") {
             let readwrite = self.cfg.mode.eq_ignore_ascii_case("readwrite");
-            let allowed = READ_ONLY_FS.contains(&fs_tool)
-                || (readwrite && WRITE_FS.contains(&fs_tool));
+            let allowed =
+                READ_ONLY_FS.contains(&fs_tool) || (readwrite && WRITE_FS.contains(&fs_tool));
             if !allowed {
                 return json!({
                     "isError": true,
@@ -622,7 +654,9 @@ impl GatewayState {
                 .await
             {
                 Ok(res) => res,
-                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+                Err(e) => {
+                    json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] })
+                }
             };
         }
 
@@ -679,12 +713,17 @@ impl GatewayState {
                 .await
             {
                 Ok(res) => res,
-                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+                Err(e) => {
+                    json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] })
+                }
             };
         }
 
         // Workbench inspection / stop / review tools
-        if matches!(name, "workbench_status" | "workbench_stop" | "workbench_review") {
+        if matches!(
+            name,
+            "workbench_status" | "workbench_stop" | "workbench_review"
+        ) {
             let readwrite = self.cfg.mode.eq_ignore_ascii_case("readwrite");
             if !self.cfg.enable_commands || !readwrite {
                 return json!({
@@ -735,7 +774,10 @@ impl GatewayState {
             let Some(cmd) = task
                 .get("commands")
                 .and_then(Value::as_array)
-                .and_then(|arr| arr.iter().find(|c| c.get("requestId").and_then(Value::as_str) == Some(task_id)))
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|c| c.get("requestId").and_then(Value::as_str) == Some(task_id))
+                })
             else {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "Unknown command for this owner" }] });
             };
@@ -797,7 +839,10 @@ impl GatewayState {
         }
 
         // Git read-only tools & run_command via Workbench
-        if matches!(name, "git_status" | "git_diff" | "git_log" | "git_show" | "run_command") {
+        if matches!(
+            name,
+            "git_status" | "git_diff" | "git_log" | "git_show" | "run_command"
+        ) {
             if !self.cfg.enable_commands {
                 return json!({ "isError": true, "content": [{ "type": "text", "text": "Command execution is disabled" }] });
             }
@@ -820,19 +865,30 @@ impl GatewayState {
                     return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] });
                 }
             };
-            let timeout = args.get("timeout").and_then(Value::as_u64).unwrap_or(60).clamp(1, 600);
+            let timeout = args
+                .get("timeout")
+                .and_then(Value::as_u64)
+                .unwrap_or(60)
+                .clamp(1, 600);
 
             let cmd_line = if name == "run_command" {
                 match args.get("commandLine").and_then(Value::as_str) {
                     Some(c) if !c.trim().is_empty() => c.to_string(),
-                    _ => return json!({ "isError": true, "content": [{ "type": "text", "text": "commandLine is required" }] }),
+                    _ => {
+                        return json!({ "isError": true, "content": [{ "type": "text", "text": "commandLine is required" }] })
+                    }
                 }
             } else {
                 let sub = name.strip_prefix("git_").unwrap();
                 let extra: Vec<String> = args
                     .get("extra_args")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(String::from)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 if let Err(e) = validate_readonly_git_args(&extra) {
                     return json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] });
@@ -912,7 +968,9 @@ impl GatewayState {
                     }
                     res
                 }
-                Err(e) => json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] }),
+                Err(e) => {
+                    json!({ "isError": true, "content": [{ "type": "text", "text": e.to_string() }] })
+                }
             };
             if terminal {
                 self.journal.record_finished(&task_id, result.clone());
@@ -933,7 +991,9 @@ fn with_cors(mut resp: Response) -> Response {
     );
     h.insert(
         "access-control-allow-headers",
-        HeaderValue::from_static("authorization, content-type, accept, mcp-protocol-version, mcp-session-id"),
+        HeaderValue::from_static(
+            "authorization, content-type, accept, mcp-protocol-version, mcp-session-id",
+        ),
     );
     h.insert(
         "access-control-expose-headers",
@@ -1013,10 +1073,9 @@ async fn oauth_authorize_post(
         .unwrap_or("");
     let resp = state.oauth.handle_authorize(true, params, lang);
     if resp.status() == StatusCode::FOUND {
-        state.audit.record(
-            "oauth_authorized",
-            json!({ "clientId": client_id }),
-        );
+        state
+            .audit
+            .record("oauth_authorized", json!({ "clientId": client_id }));
     }
     resp
 }
@@ -1179,9 +1238,7 @@ pub fn build_router(cfg: GatewayServerConfig) -> (Router, GatewayHandle) {
         .route("/oauth/token", post(oauth_token).options(cors_preflight))
         .route(
             &mcp_path,
-            post(mcp_handler)
-                .delete(mcp_delete)
-                .options(cors_preflight),
+            post(mcp_handler).delete(mcp_delete).options(cors_preflight),
         )
         .route("/", options(cors_preflight))
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))

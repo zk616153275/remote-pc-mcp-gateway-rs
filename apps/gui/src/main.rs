@@ -51,8 +51,8 @@ mod single_instance {
         CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Threading::{
-        CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject,
-        EVENT_MODIFY_STATE, INFINITE,
+        CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject, EVENT_MODIFY_STATE,
+        INFINITE,
     };
 
     const MUTEX_NAME: &str = "Local\\RemotePcMcpGatewayGuiMutex";
@@ -508,7 +508,10 @@ async fn ping_healthz(client: &reqwest::Client, port: u16) -> bool {
     }
 }
 
-async fn probe_external_backend(client: &reqwest::Client, cfg: &AppConfig) -> Option<ExternalProbe> {
+async fn probe_external_backend(
+    client: &reqwest::Client,
+    cfg: &AppConfig,
+) -> Option<ExternalProbe> {
     let (fs_ok, workbench_ok, gateway_ok, chrome_ok) = tokio::join!(
         ping_healthz(client, cfg.local_ports.fs_bearer),
         ping_healthz(client, cfg.local_ports.workbench),
@@ -833,7 +836,8 @@ fn read_recent_activities(
                     }
                 };
                 stats.total += 1;
-                let id = stable_activity_id("a", &[ts_raw, tool, target, command_id], &mut seen_ids);
+                let id =
+                    stable_activity_id("a", &[ts_raw, tool, target, command_id], &mut seen_ids);
                 items.push(ActivityEntry {
                     id,
                     time: ts,
@@ -1134,12 +1138,8 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
         let err = state.last_error.lock().await.clone();
         let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
         let env = state.env_cache.clone();
-        let (activities, stats) = read_recent_activities_cached(
-            &state.activity_cache,
-            true,
-            &s.connection_mode,
-            s.gw_ok,
-        );
+        let (activities, stats) =
+            read_recent_activities_cached(&state.activity_cache, true, &s.connection_mode, s.gw_ok);
         return Ok(StatusSnapshot {
             running: true,
             managed_by: "gui".into(),
@@ -1513,13 +1513,20 @@ async fn start_services_inner(cfg: AppConfig, state: &Arc<GuiState>) -> Result<(
             .push_log(
                 "ok",
                 "GATEWAY",
-                format!("OAuth 2.1 聚合网关已监听 127.0.0.1:{}", cfg.gateway.local_port),
+                format!(
+                    "OAuth 2.1 聚合网关已监听 127.0.0.1:{}",
+                    cfg.gateway.local_port
+                ),
             )
             .await;
         (Some(handle), true)
     } else {
         state
-            .push_log("info", "GATEWAY", "VPS 模式：聚合网关运行在远端 VPS，跳过本地监听")
+            .push_log(
+                "info",
+                "GATEWAY",
+                "VPS 模式：聚合网关运行在远端 VPS，跳过本地监听",
+            )
             .await;
         (None, false)
     };
@@ -1570,7 +1577,11 @@ async fn start_services_inner(cfg: AppConfig, state: &Arc<GuiState>) -> Result<(
                             format!(
                                 "Cloudflare 公网入口已打通: {}（Fake-IP 绕过={}）",
                                 public_origin,
-                                if fake_ip_bypassed { "QUIC+Anycast" } else { "直连" }
+                                if fake_ip_bypassed {
+                                    "QUIC+Anycast"
+                                } else {
+                                    "直连"
+                                }
                             ),
                         )
                         .await;
@@ -1909,8 +1920,7 @@ fn main() {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -1953,13 +1963,8 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
-            let quit_i = MenuItem::with_id(
-                app,
-                "quit",
-                "退出控制台 / Quit Panel",
-                true,
-                None::<&str>,
-            )?;
+            let quit_i =
+                MenuItem::with_id(app, "quit", "退出控制台 / Quit Panel", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &restart_i, &quit_i])?;
 
             TrayIconBuilder::new()
@@ -2001,8 +2006,12 @@ fn main() {
             if auto_start {
                 let st = app.state::<Arc<GuiState>>().inner().clone();
                 tauri::async_runtime::spawn(async move {
-                    st.push_log("info", "BOOT", "已加载最新版本，正在自动恢复本地服务与隧道...")
-                        .await;
+                    st.push_log(
+                        "info",
+                        "BOOT",
+                        "已加载最新版本，正在自动恢复本地服务与隧道...",
+                    )
+                    .await;
                     match load_config() {
                         Ok(cfg) => {
                             if let Err(e) = start_services_inner(cfg, &st).await {

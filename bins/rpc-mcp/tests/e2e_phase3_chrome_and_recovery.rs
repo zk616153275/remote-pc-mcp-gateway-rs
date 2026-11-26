@@ -115,7 +115,10 @@ rl.on("line", (line) => {
         .json()
         .await
         .unwrap();
-    assert_eq!(ok_call["result"]["content"][0]["text"], "mock-called:list_pages");
+    assert_eq!(
+        ok_call["result"]["content"][0]["text"],
+        "mock-called:list_pages"
+    );
 
     backend.shutdown().await;
 
@@ -124,7 +127,10 @@ rl.on("line", (line) => {
     {
         let j = TaskJournal::new(Some(jdir.clone()));
         j.record_running("task-1".into(), "owner-a".into(), "run_command".into());
-        j.record_finished("task-1", json!({ "content": [{ "type": "text", "text": "done" }] }));
+        j.record_finished(
+            "task-1",
+            json!({ "content": [{ "type": "text", "text": "done" }] }),
+        );
     }
     let reloaded = TaskJournal::new(Some(jdir));
     assert!(reloaded.get("task-1", "owner-b").is_none());

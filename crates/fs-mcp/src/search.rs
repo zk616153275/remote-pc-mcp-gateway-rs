@@ -125,7 +125,11 @@ pub fn grep_files_sync(
         impl<'a> Sink for ContextSink<'a> {
             type Error = io::Error;
 
-            fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
+            fn matched(
+                &mut self,
+                _searcher: &Searcher,
+                mat: &SinkMatch<'_>,
+            ) -> Result<bool, Self::Error> {
                 *self.total_matches += 1;
                 let lnum = mat.line_number().unwrap_or(0);
                 let line = String::from_utf8_lossy(mat.bytes());
@@ -138,7 +142,11 @@ pub fn grep_files_sync(
                 Ok(true)
             }
 
-            fn context(&mut self, _searcher: &Searcher, ctx: &SinkContext<'_>) -> Result<bool, Self::Error> {
+            fn context(
+                &mut self,
+                _searcher: &Searcher,
+                ctx: &SinkContext<'_>,
+            ) -> Result<bool, Self::Error> {
                 let lnum = ctx.line_number().unwrap_or(0);
                 let line = String::from_utf8_lossy(ctx.bytes());
                 self.file_lines
@@ -248,9 +256,7 @@ pub fn search_files_sync(
             }
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if glob.is_match(rel)
-            || glob.is_match(name)
-            || name.to_lowercase().contains(&pattern_lower)
+        if glob.is_match(rel) || glob.is_match(name) || name.to_lowercase().contains(&pattern_lower)
         {
             matches.push(path.display().to_string());
             if matches.len() >= max_results {
