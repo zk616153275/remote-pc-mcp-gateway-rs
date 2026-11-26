@@ -1,0 +1,105 @@
+name: Build and Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Binaries
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Build CLI and GUI
+        run: |
+          cargo build --release --bin rpc-mcp
+          cargo build --release --package rpc-mcp-gui
+
+      - name: Package Windows Zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist/windows/config -Force
+          Copy-Item target/release/rpc-mcp.exe dist/windows/
+          Copy-Item target/release/rpc-mcp-gui.exe dist/windows/
+          Copy-Item Start-Agent.bat dist/windows/
+          Copy-Item Start-Agent.ps1 dist/windows/
+          Copy-Item Start-GUI.bat dist/windows/
+          Copy-Item Stop-Agent.bat dist/windows/
+          Copy-Item Stop-Agent.ps1 dist/windows/
+          Copy-Item config/config.example.json dist/windows/config/
+          Copy-Item README.md dist/windows/
+          Compress-Archive -Path dist/windows/* -DestinationPath remote-pc-mcp-gateway-windows-x86_64.zip
+
+      - name: Save Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-pc-mcp-gateway-windows-x86_64
+          path: remote-pc-mcp-gateway-windows-x86_64.zip
+
+  build-linux:
+    name: Build Linux Static Gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust musl
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl compiler
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build static rpc-mcp
+        run: cargo build --release --package rpc-mcp --target x86_64-unknown-linux-musl
+
+      - name: Package Linux Archive
+        run: |
+          mkdir -p dist/linux/config
+          cp target/x86_64-unknown-linux-musl/release/rpc-mcp dist/linux/
+          cp config/config.example.json dist/linux/config/
+          cp README.md dist/linux/
+          tar -czvf remote-pc-mcp-gateway-linux-x86_64-musl.tar.gz -C dist/linux .
+
+      - name: Save Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-pc-mcp-gateway-linux-x86_64-musl
+          path: remote-pc-mcp-gateway-linux-x86_64-musl.tar.gz
+
+  publish-release:
+    name: Publish Release Assets
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows archive
+        uses: actions/download-artifact@v4
+        with:
+          name: remote-pc-mcp-gateway-windows-x86_64
+
+      - name: Download Linux archive
+        uses: actions/download-artifact@v4
+        with:
+          name: remote-pc-mcp-gateway-linux-x86_64-musl
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            remote-pc-mcp-gateway-windows-x86_64.zip
+            remote-pc-mcp-gateway-linux-x86_64-musl.tar.gz
+          generate_release_notes: true
