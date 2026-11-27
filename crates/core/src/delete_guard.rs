@@ -17,9 +17,13 @@ pub fn configure_global_delete_guard_log_max_mb(max_mb: u64) {
     GLOBAL_DG_LOG_MAX_BYTES.store(bytes, Ordering::Relaxed);
 }
 
-fn state_lock() -> &'static Mutex<()> {
+pub fn delete_guard_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn state_lock() -> &'static Mutex<()> {
+    delete_guard_lock()
 }
 
 struct Rule {

@@ -1,9 +1,10 @@
 use crate::audit::audit_write_lock;
 use crate::config::RetentionConfig;
+use crate::delete_guard::delete_guard_lock;
 use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDateTime, TimeZone, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -61,6 +62,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
 
 #[cfg(windows)]
 fn is_command_locked(cmd_dir: &Path) -> bool {
+    use std::fs::OpenOptions;
     use std::os::windows::fs::OpenOptionsExt;
     let lock_path = cmd_dir.join("owner.lock");
     if !lock_path.exists() {
@@ -79,11 +81,16 @@ fn is_command_locked(_cmd_dir: &Path) -> bool {
     false
 }
 
+fn has_numeric_suffix(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn is_audit_filename(name: &str) -> bool {
     name == "local-audit.jsonl"
         || name == "gateway-audit.jsonl"
-        || name.starts_with("local-audit.jsonl.")
-        || name.starts_with("gateway-audit.jsonl.")
+        || has_numeric_suffix(name, "local-audit.jsonl.")
+        || has_numeric_suffix(name, "gateway-audit.jsonl.")
 }
 
 pub fn inspect_storage_usage(state_root: &Path) -> StorageUsage {
@@ -536,26 +543,31 @@ pub fn run_retention_cleanup(
 
     // 3. Delete guard log & agent log
     let dg_log = wb_root.join("delete-guard").join("delete-guard.log");
-    if allow_active_log_trim {
-        if let Some(cl) = cutoff_local {
-            if dg_log.is_file() {
-                if let Some((trimmed, freed)) = trim_delete_guard_log(&dg_log, cl) {
-                    if trimmed > 0 {
-                        report.aux_files_trimmed += 1;
-                        report.freed_bytes = report.freed_bytes.saturating_add(freed);
+    {
+        let _dg_guard = delete_guard_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if allow_active_log_trim {
+            if let Some(cl) = cutoff_local {
+                if dg_log.is_file() {
+                    if let Some((trimmed, freed)) = trim_delete_guard_log(&dg_log, cl) {
+                        if trimmed > 0 {
+                            report.aux_files_trimmed += 1;
+                            report.freed_bytes = report.freed_bytes.saturating_add(freed);
+                        }
                     }
                 }
             }
         }
+        rotate_or_prune_aux_log(
+            &dg_log,
+            aux_max_bytes,
+            aux_max_age,
+            now_sys,
+            allow_active_log_trim,
+            &mut report,
+        );
     }
-    rotate_or_prune_aux_log(
-        &dg_log,
-        aux_max_bytes,
-        aux_max_age,
-        now_sys,
-        allow_active_log_trim,
-        &mut report,
-    );
     rotate_or_prune_aux_log(
         &logs_dir.join("agent.log"),
         aux_max_bytes,

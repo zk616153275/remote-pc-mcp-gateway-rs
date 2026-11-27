@@ -1061,9 +1061,6 @@ async fn download_cloudflared(state: tauri::State<'_, Arc<GuiState>>) -> Result<
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         std::fs::create_dir_all(&tools_dir).map_err(|e| format!("创建 tools 目录失败: {e}"))?;
         std::fs::write(&tmp, &bytes_vec).map_err(|e| format!("写入临时文件失败: {e}"))?;
-        if target_clone.exists() {
-            let _ = std::fs::remove_file(&target_clone);
-        }
         std::fs::rename(&tmp, &target_clone).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             format!("保存 cloudflared.exe 失败: {e}")

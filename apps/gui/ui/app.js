@@ -21,6 +21,7 @@ let pollTimer = null;
 let pollIntervalMs = 2000;
 let lastEnv = { pwshOk: true, cloudflaredOk: true, sshOk: true, nodeOk: true };
 let downloadingCf = false;
+let activeDepModalKey = "";
 
 const actQuery = {
   page: 1,
@@ -711,7 +712,15 @@ async function runRecheckEnv() {
   try {
     const env = await invoke("refresh_env");
     applyEnvUi(env);
-    toast(isZh ? "依赖状态已刷新" : "Environment re-checked");
+    const modal = $("dep-modal");
+    const depOkMap = { cf: env.cloudflaredOk, pwsh: env.pwshOk, node: env.nodeOk, ssh: env.sshOk };
+    if (modal && !modal.classList.contains("hidden") && activeDepModalKey && depOkMap[activeDepModalKey]) {
+      modal.classList.add("hidden");
+      activeDepModalKey = "";
+      toast(isZh ? "已检测到该依赖安装就绪" : "Dependency detected and ready");
+    } else {
+      toast(isZh ? "依赖状态已刷新" : "Environment re-checked");
+    }
   } catch (e) {
     showAlert(String(e));
   }
@@ -788,6 +797,7 @@ function openDepModal(dep) {
     toast(isZh ? `${info.zhTitle} 已安装就绪` : `${info.enTitle} is ready`);
     return;
   }
+  activeDepModalKey = dep;
   $("dep-modal-title").textContent = isZh ? info.zhTitle : info.enTitle;
   $("dep-modal-desc").textContent = isZh ? info.zhDesc : info.enDesc;
   $("dep-modal-cmd").textContent = info.cmd;
@@ -1868,8 +1878,10 @@ $("mini-activity-feed").addEventListener("click", async (e) => {
   const item = dashboardRecent.find((x) => x.id === id);
   if (!item) return;
   expandedIds.add(id);
+  resetActivityFilters({ fetch: false });
+  actPage.revision = latestActivityRevision || "sync";
   switchTab("activity");
-  await resetActivityFilters({ fetch: true });
+  await fetchActivityPage({ preserveScroll: false });
   if (item.commandId) {
     ensureCommandDetail(item);
   }
@@ -2007,9 +2019,13 @@ $("btn-dep-copy-cmd").addEventListener("click", async () => {
 });
 $("btn-dep-modal-close").addEventListener("click", () => {
   $("dep-modal").classList.add("hidden");
+  activeDepModalKey = "";
 });
 $("dep-modal").addEventListener("click", (e) => {
-  if (e.target === $("dep-modal")) $("dep-modal").classList.add("hidden");
+  if (e.target === $("dep-modal")) {
+    $("dep-modal").classList.add("hidden");
+    activeDepModalKey = "";
+  }
 });
 
 document.querySelectorAll("[data-toggle]").forEach((btn) => {
