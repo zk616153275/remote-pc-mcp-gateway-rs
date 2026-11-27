@@ -28,13 +28,16 @@ Write-Host "Starting Rust rpc-mcp unified stack (up)..." -ForegroundColor Cyan
 # 2. Launch `rpc-mcp up` detached (owns SSH/Cloudflare tunnel under Windows Job Object + auto-reconnect)
 $upArgs = "up --config `"$configPath`" --state-dir `"$stateDir`""
 if ($cfg.connectionMode -eq 'cloudflare-quick' -or $cfg.connectionMode -eq 'cloudflare-named' -or $cfg.connectionMode -eq 'cloudflare') {
+    $localCf = Join-Path $repoRoot 'tools\cloudflared.exe'
     $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
-    $cfPath = if ($cfCmd) { $cfCmd.Source } else {
-        @('C:\Program Files (x86)\cloudflared\cloudflared.exe', 'C:\Program Files\cloudflared\cloudflared.exe') |
+    $cfPath = if (Test-Path $localCf) { $localCf } elseif ($cfCmd) { $cfCmd.Source } else {
+        @('C:\Program Files\cloudflared\cloudflared.exe', 'C:\Program Files (x86)\cloudflared\cloudflared.exe') |
             Where-Object { Test-Path $_ } | Select-Object -First 1
     }
     if ($cfPath) {
         $upArgs += " --cloudflared `"$cfPath`""
+    } else {
+        Write-Host "Warning: cloudflared.exe not found. Install via: winget install --id Cloudflare.cloudflared -e (or use the GUI one-click downloader)" -ForegroundColor Yellow
     }
 }
 $psiUp = [System.Diagnostics.ProcessStartInfo]::new()

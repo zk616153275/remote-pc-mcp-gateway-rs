@@ -19,6 +19,8 @@ let isZh = true;
 let toastTimer = null;
 let pollTimer = null;
 let pollIntervalMs = 2000;
+let lastEnv = { pwshOk: true, cloudflaredOk: true, sshOk: true, nodeOk: true };
+let downloadingCf = false;
 
 const actQuery = {
   page: 1,
@@ -212,6 +214,11 @@ const I18N = {
     btnOpenLogsDir: "打开日志目录",
     btnRegenApproval: "重新生成 Owner Approval Key",
     btnSaveSettings: "保存系统设置",
+    cfMissingTitle: "未检测到 cloudflared.exe（Cloudflare 隧道必需）",
+    btnDlCf: "一键下载 cloudflared",
+    btnDlCfBusy: "正在下载中...",
+    btnRecheck: "重新检测",
+    depOrCmd: "或打开终端执行命令行安装：",
   },
   en: {
     navDashboard: "Dashboard",
@@ -376,6 +383,11 @@ const I18N = {
     btnOpenLogsDir: "Open Logs Folder",
     btnRegenApproval: "Regenerate Owner Approval Key",
     btnSaveSettings: "Save Settings",
+    cfMissingTitle: "cloudflared.exe not found (required for Cloudflare Tunnel)",
+    btnDlCf: "Download cloudflared",
+    btnDlCfBusy: "Downloading...",
+    btnRecheck: "Re-check",
+    depOrCmd: "Or install via terminal command:",
   },
 };
 
@@ -674,6 +686,113 @@ function updateModeUi(mode) {
   });
   $("group-cf-named").classList.toggle("hidden", selectedMode !== "cloudflare-named");
   $("group-vps").classList.toggle("hidden", selectedMode !== "vps");
+  updateCfMissingBanner();
+}
+
+function updateCfMissingBanner() {
+  const box = $("cf-missing-box");
+  if (!box) return;
+  const needCf = selectedMode === "cloudflare-quick" || selectedMode === "cloudflare-named";
+  box.classList.toggle("hidden", !(needCf && !lastEnv.cloudflaredOk));
+}
+
+function applyEnvUi(env) {
+  if (!env) return;
+  lastEnv = env;
+  $("env-pwsh").classList.toggle("ok", env.pwshOk);
+  $("env-cf").classList.toggle("ok", env.cloudflaredOk);
+  $("env-ssh").classList.toggle("ok", env.sshOk);
+  $("env-node").classList.toggle("ok", env.nodeOk);
+  updateCfMissingBanner();
+}
+
+async function runRecheckEnv() {
+  if (!invoke) return;
+  try {
+    const env = await invoke("refresh_env");
+    applyEnvUi(env);
+    toast(isZh ? "依赖状态已刷新" : "Environment re-checked");
+  } catch (e) {
+    showAlert(String(e));
+  }
+}
+
+async function runDownloadCloudflared() {
+  if (!invoke || downloadingCf) return;
+  downloadingCf = true;
+  const btns = [$("btn-dl-cf"), $("btn-dep-dl-cf")].filter(Boolean);
+  btns.forEach((b) => {
+    b.disabled = true;
+    b.textContent = t("btnDlCfBusy");
+  });
+  showAlert("");
+  try {
+    await invoke("download_cloudflared");
+    const env = await invoke("refresh_env");
+    applyEnvUi(env);
+    $("dep-modal").classList.add("hidden");
+    toast(isZh ? "cloudflared.exe 已就绪，可直接启动服务" : "cloudflared.exe is ready");
+  } catch (e) {
+    showAlert(String(e));
+  } finally {
+    downloadingCf = false;
+    btns.forEach((b) => {
+      b.disabled = false;
+      b.textContent = t("btnDlCf");
+    });
+  }
+}
+
+function openDepModal(dep) {
+  const infoMap = {
+    cf: {
+      ok: lastEnv.cloudflaredOk,
+      zhTitle: "Cloudflared（公网穿透隧道）",
+      enTitle: "Cloudflared (Public Tunnel)",
+      zhDesc: "Cloudflare Quick / Named 隧道模式需要本机安装 cloudflared.exe。你可以点击下方按钮一键自动下载到 tools/cloudflared.exe，或在终端执行以下命令安装：",
+      enDesc: "Required for Cloudflare Quick / Named Tunnel modes. Click below to auto-download to tools/cloudflared.exe, or install via terminal:",
+      cmd: "winget install --id Cloudflare.cloudflared -e",
+      canAutoDownload: true,
+    },
+    pwsh: {
+      ok: lastEnv.pwshOk,
+      zhTitle: "PowerShell 7（AI Workbench 命令执行）",
+      enTitle: "PowerShell 7 (AI Workbench)",
+      zhDesc: "AI Workbench 执行本机终端命令推荐使用 PowerShell 7（pwsh.exe）。可在终端执行以下命令一键安装：",
+      enDesc: "Recommended for running local shell commands via AI Workbench. Install via terminal:",
+      cmd: "winget install --id Microsoft.PowerShell -e",
+      canAutoDownload: false,
+    },
+    node: {
+      ok: lastEnv.nodeOk,
+      zhTitle: "Node.js（Chrome DevTools MCP Sidecar）",
+      enTitle: "Node.js (Chrome DevTools Sidecar)",
+      zhDesc: "启用浏览器自动化（Chrome Broker）时需要 Node.js / npx。若不使用浏览器控制可忽略；需要时可执行：",
+      enDesc: "Required only when Chrome DevTools MCP Sidecar is enabled. Install via terminal:",
+      cmd: "winget install --id OpenJS.NodeJS.LTS -e",
+      canAutoDownload: false,
+    },
+    ssh: {
+      ok: lastEnv.sshOk,
+      zhTitle: "OpenSSH Client（VPS 反向隧道）",
+      enTitle: "OpenSSH Client (VPS Reverse Tunnel)",
+      zhDesc: "自建 Linux VPS 模式需要 Windows OpenSSH 客户端（ssh.exe）。可在管理员终端执行以下命令启用：",
+      enDesc: "Required for self-hosted Linux VPS SSH -R mode. Enable in an elevated terminal:",
+      cmd: "Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0",
+      canAutoDownload: false,
+    },
+  };
+  const info = infoMap[dep];
+  if (!info) return;
+  if (info.ok) {
+    toast(isZh ? `${info.zhTitle} 已安装就绪` : `${info.enTitle} is ready`);
+    return;
+  }
+  $("dep-modal-title").textContent = isZh ? info.zhTitle : info.enTitle;
+  $("dep-modal-desc").textContent = isZh ? info.zhDesc : info.enDesc;
+  $("dep-modal-cmd").textContent = info.cmd;
+  $("btn-dep-dl-cf").classList.toggle("hidden", !info.canAutoDownload);
+  $("dep-modal").classList.remove("hidden");
 }
 
 function updateChecklistVisibility(running, mcpUrl) {
@@ -1505,10 +1624,7 @@ function applyStatus(st) {
   $("fakeip-badge").classList.toggle("hidden", !st.fakeIpBypassed);
 
   if (st.env) {
-    $("env-pwsh").classList.toggle("ok", st.env.pwshOk);
-    $("env-cf").classList.toggle("ok", st.env.cloudflaredOk);
-    $("env-ssh").classList.toggle("ok", st.env.sshOk);
-    $("env-node").classList.toggle("ok", st.env.nodeOk);
+    applyEnvUi(st.env);
   }
   renderLogs(st.logs);
   handleStatusActivities(st.activities, st.stats, st.activityRevision);
@@ -1870,6 +1986,31 @@ $("btn-regen-approval").addEventListener("click", async () => {
 });
 
 $("btn-save-settings").addEventListener("click", persist);
+
+// Dependency helper actions
+document.querySelectorAll(".env-chip[data-dep]").forEach((btn) => {
+  btn.addEventListener("click", () => openDepModal(btn.dataset.dep));
+});
+$("btn-dl-cf").addEventListener("click", runDownloadCloudflared);
+$("btn-dep-dl-cf").addEventListener("click", runDownloadCloudflared);
+$("btn-recheck-env").addEventListener("click", runRecheckEnv);
+$("btn-dep-recheck").addEventListener("click", runRecheckEnv);
+$("btn-copy-cf-cmd").addEventListener("click", async () => {
+  await navigator.clipboard.writeText("winget install --id Cloudflare.cloudflared -e");
+  toast(t("toastCopied"));
+});
+$("btn-dep-copy-cmd").addEventListener("click", async () => {
+  const txt = $("dep-modal-cmd").textContent || "";
+  if (!txt) return;
+  await navigator.clipboard.writeText(txt);
+  toast(t("toastCopied"));
+});
+$("btn-dep-modal-close").addEventListener("click", () => {
+  $("dep-modal").classList.add("hidden");
+});
+$("dep-modal").addEventListener("click", (e) => {
+  if (e.target === $("dep-modal")) $("dep-modal").classList.add("hidden");
+});
 
 document.querySelectorAll("[data-toggle]").forEach((btn) => {
   btn.addEventListener("click", () => {

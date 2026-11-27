@@ -74,10 +74,10 @@
       <div class="env-box">
         <div class="env-title" data-i18n="envTitle">本机依赖自检</div>
         <div class="env-grid">
-          <span class="env-chip" id="env-pwsh" title="PowerShell 7"><i></i>PWSH 7</span>
-          <span class="env-chip" id="env-cf" title="Cloudflared"><i></i>Cloudflared</span>
-          <span class="env-chip" id="env-ssh" title="OpenSSH"><i></i>OpenSSH</span>
-          <span class="env-chip" id="env-node" title="Node.js"><i></i>Node</span>
+          <button class="env-chip" id="env-pwsh" type="button" data-dep="pwsh" title="PowerShell 7（点击查看安装指引）"><i></i>PWSH 7</button>
+          <button class="env-chip" id="env-cf" type="button" data-dep="cf" title="Cloudflared（点击一键下载或安装）"><i></i>Cloudflared</button>
+          <button class="env-chip" id="env-ssh" type="button" data-dep="ssh" title="OpenSSH（点击查看安装指引）"><i></i>OpenSSH</button>
+          <button class="env-chip" id="env-node" type="button" data-dep="node" title="Node.js（点击查看安装指引）"><i></i>Node</button>
         </div>
       </div>
 
@@ -360,6 +360,21 @@
             <div class="mode-card" data-mode="local">
               <div class="mode-title" data-i18n="titleLocal">仅本机调试模式</div>
               <div class="mode-desc" data-i18n="descLocal">仅监听 127.0.0.1，不拉起外部隧道，适合本机联调或外接自定义反代。</div>
+            </div>
+          </div>
+
+          <div class="dep-banner hidden" id="cf-missing-box">
+            <div class="dep-banner-head">
+              <strong data-i18n="cfMissingTitle">未检测到 cloudflared.exe（Cloudflare 隧道必需）</strong>
+              <div class="dep-banner-actions">
+                <button class="btn btn-primary btn-sm" id="btn-dl-cf" type="button" data-i18n="btnDlCf">一键下载 cloudflared</button>
+                <button class="btn btn-ghost btn-sm" id="btn-recheck-env" type="button" data-i18n="btnRecheck">重新检测</button>
+              </div>
+            </div>
+            <div class="dep-cmd-row">
+              <span class="dep-cmd-lbl" data-i18n="depOrCmd">或打开终端执行命令行安装：</span>
+              <code class="dep-cmd-code">winget install --id Cloudflare.cloudflared -e</code>
+              <button class="act-qbtn" id="btn-copy-cf-cmd" type="button" data-i18n="copy">复制</button>
             </div>
           </div>
 
@@ -682,6 +697,25 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <!-- Dependency helper modal (shown when clicking a missing sidebar env chip) -->
+  <div class="modal-backdrop hidden" id="dep-modal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <strong id="dep-modal-title">依赖安装指引</strong>
+        <button class="alert-close" id="btn-dep-modal-close" type="button" title="关闭">×</button>
+      </div>
+      <p class="sec-desc" id="dep-modal-desc" style="margin:6px 0 12px;"></p>
+      <div class="dep-cmd-box">
+        <code id="dep-modal-cmd"></code>
+        <button class="btn btn-secondary btn-sm" id="btn-dep-copy-cmd" type="button" data-i18n="copy">复制</button>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-primary btn-sm hidden" id="btn-dep-dl-cf" type="button" data-i18n="btnDlCf">一键下载 cloudflared</button>
+        <button class="btn btn-ghost btn-sm" id="btn-dep-recheck" type="button" data-i18n="btnRecheck">重新检测</button>
+      </div>
+    </div>
   </div>
 
   <div class="toast hidden" id="toast"></div>

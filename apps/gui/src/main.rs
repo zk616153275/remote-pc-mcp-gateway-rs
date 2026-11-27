@@ -312,10 +312,11 @@ struct GuiState {
     stack: Mutex<Option<RunningStack>>,
     starting: AtomicBool,
     restarting: AtomicBool,
+    downloading_cf: AtomicBool,
     attached_logged: AtomicBool,
     last_error: Mutex<Option<String>>,
     logs: Mutex<VecDeque<LogEntry>>,
-    env_cache: EnvCheck,
+    env_cache: std::sync::Mutex<EnvCheck>,
     activity_store: ActivityStore,
     http: reqwest::Client,
 }
@@ -331,13 +332,27 @@ impl Default for GuiState {
             stack: Mutex::new(None),
             starting: AtomicBool::new(false),
             restarting: AtomicBool::new(false),
+            downloading_cf: AtomicBool::new(false),
             attached_logged: AtomicBool::new(false),
             last_error: Mutex::new(None),
             logs: Mutex::new(VecDeque::new()),
-            env_cache: check_env(),
+            env_cache: std::sync::Mutex::new(check_env()),
             activity_store: ActivityStore::default(),
             http,
         }
+    }
+}
+
+impl GuiState {
+    fn current_env(&self) -> EnvCheck {
+        self.env_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn set_env(&self, env: EnvCheck) {
+        *self.env_cache.lock().unwrap_or_else(|e| e.into_inner()) = env;
     }
 }
 
@@ -590,14 +605,15 @@ fn find_in_path(exe: &str) -> Option<PathBuf> {
 }
 
 fn find_cloudflared() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let root = repo_root();
     let candidates = [
-        cwd.join("tools").join("cloudflared.exe"),
+        root.join("tools").join("cloudflared.exe"),
         PathBuf::from(r"C:\Program Files\cloudflared\cloudflared.exe"),
+        PathBuf::from(r"C:\Program Files (x86)\cloudflared\cloudflared.exe"),
     ];
     candidates
         .into_iter()
-        .find(|p| p.exists())
+        .find(|p| p.is_file())
         .or_else(|| find_in_path("cloudflared.exe"))
 }
 
@@ -972,6 +988,122 @@ fn regenerate_approval_key() -> String {
 }
 
 #[tauri::command]
+async fn refresh_env(state: tauri::State<'_, Arc<GuiState>>) -> Result<EnvCheck, String> {
+    let env = tokio::task::spawn_blocking(check_env)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.set_env(env.clone());
+    Ok(env)
+}
+
+#[tauri::command]
+async fn download_cloudflared(state: tauri::State<'_, Arc<GuiState>>) -> Result<String, String> {
+    const CF_URL: &str =
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe";
+
+    if state
+        .downloading_cf
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("正在下载 cloudflared.exe，请稍候...".into());
+    }
+    struct DlGuard<'a>(&'a AtomicBool);
+    impl Drop for DlGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = DlGuard(&state.downloading_cf);
+
+    state
+        .push_log(
+            "info",
+            "TOOLS",
+            "正在从 Cloudflare 官方 GitHub Releases 下载 cloudflared.exe（遵循系统代理）...",
+        )
+        .await;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .user_agent("remote-pc-mcp-gateway/0.1")
+        .build()
+        .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
+
+    let resp = client.get(CF_URL).send().await.map_err(|e| {
+        format!("下载 cloudflared 失败（请检查网络或代理，或使用 winget 命令安装）: {e}")
+    })?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "下载 cloudflared 返回 HTTP {}，请改用命令行 winget 安装",
+            resp.status()
+        ));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取 cloudflared 安装包数据失败: {e}"))?;
+
+    if bytes.len() < 1024 * 1024 || &bytes[..2] != b"MZ" {
+        return Err(
+            "下载的文件不是有效的 Windows 可执行程序，请检查网络代理或改用 winget 安装".into(),
+        );
+    }
+
+    let tools_dir = repo_root().join("tools");
+    let target = tools_dir.join("cloudflared.exe");
+    let tmp = tools_dir.join(format!("cloudflared.{}.tmp", std::process::id()));
+    let target_clone = target.clone();
+    let bytes_vec = bytes.to_vec();
+
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        std::fs::create_dir_all(&tools_dir).map_err(|e| format!("创建 tools 目录失败: {e}"))?;
+        std::fs::write(&tmp, &bytes_vec).map_err(|e| format!("写入临时文件失败: {e}"))?;
+        if target_clone.exists() {
+            let _ = std::fs::remove_file(&target_clone);
+        }
+        std::fs::rename(&tmp, &target_clone).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("保存 cloudflared.exe 失败: {e}")
+        })?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    let env = tokio::task::spawn_blocking(check_env)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.set_env(env);
+
+    {
+        let mut le = state.last_error.lock().await;
+        if le
+            .as_deref()
+            .map(|m| m.contains("cloudflared.exe"))
+            .unwrap_or(false)
+        {
+            *le = None;
+        }
+    }
+
+    let path_str = target.display().to_string();
+    state
+        .push_log(
+            "ok",
+            "TOOLS",
+            format!(
+                "cloudflared.exe 下载完成（{:.1} MB）-> {path_str}",
+                bytes.len() as f64 / (1024.0 * 1024.0)
+            ),
+        )
+        .await;
+    Ok(path_str)
+}
+
+#[tauri::command]
 async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnapshot, String> {
     let mut guard = state.stack.lock().await;
     if let Some(ref mut s) = *guard {
@@ -1015,7 +1147,7 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
 
         let err = state.last_error.lock().await.clone();
         let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
-        let env = state.env_cache.clone();
+        let env = state.current_env();
         let audit_path = select_audit_path(true, &s.connection_mode, s.gw_ok);
         let snap = state.activity_store.snapshot(
             &audit_path,
@@ -1064,7 +1196,7 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
         }
         let err = state.last_error.lock().await.clone();
         let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
-        let env = state.env_cache.clone();
+        let env = state.current_env();
         let audit_path = select_audit_path(true, &ext.connection_mode, ext.gateway_ok);
         let snap = state.activity_store.snapshot(
             &audit_path,
@@ -1102,7 +1234,7 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
     state.attached_logged.store(false, Ordering::SeqCst);
     let err = state.last_error.lock().await.clone();
     let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
-    let env = state.env_cache.clone();
+    let env = state.current_env();
     let cfg_mode = normalize_mode(&cfg.connection_mode);
     let audit_path = select_audit_path(false, &cfg_mode, false);
     let snap = state.activity_store.snapshot(
@@ -1846,6 +1978,8 @@ fn main() {
             run_manual_cleanup,
             open_app_dir,
             regenerate_approval_key,
+            refresh_env,
+            download_cloudflared,
             get_status,
             start_services,
             stop_services
