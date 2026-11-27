@@ -5,16 +5,19 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = $PSScriptRoot
 $configPath = Join-Path $repoRoot 'config\config.local.json'
 if (-not (Test-Path $configPath)) {
-    throw "Config file not found at $configPath"
+    throw "Config file not found at $configPath. Please run Start-GUI.bat first (auto-generates secrets and config.local.json), or copy config\config.example.json to config\config.local.json."
 }
 $cfg = Get-Content -Raw $configPath | ConvertFrom-Json
 $stateDir = Join-Path $repoRoot 'state'
 $logsDir = Join-Path $stateDir 'logs'
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 
-$exe = Join-Path $repoRoot 'target\release\rpc-mcp.exe'
-if (-not (Test-Path $exe)) {
-    throw "Binary not found at $exe. Please run cargo build --release first."
+$exe = @(
+    (Join-Path $repoRoot 'rpc-mcp.exe'),
+    (Join-Path $repoRoot 'target\release\rpc-mcp.exe')
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $exe) {
+    throw "Binary not found in $repoRoot or target\release\rpc-mcp.exe. Please extract the official Release zip or run cargo build-agent first."
 }
 
 # 1. Stop any already running instance cleanly
