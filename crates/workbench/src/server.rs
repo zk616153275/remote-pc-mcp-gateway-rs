@@ -664,43 +664,22 @@ impl WorkbenchEngine {
     }
 
     pub fn prune(&self) -> Value {
+        self.prune_with_policy(7, 200)
+    }
+
+    pub fn prune_with_policy(&self, retention_days: u32, max_total_mb: u64) -> Value {
         let _g = self.lock.lock().unwrap_or_else(|e| e.into_inner());
-        let max_age = Duration::from_secs(24 * 3600);
-        let now = SystemTime::now();
-        let mut pruned = 0usize;
-
-        if let Ok(rd) = fs::read_dir(self.root.join("commands")) {
-            for entry in rd.flatten() {
-                let path = entry.path();
-                if !path.is_dir() || is_command_locked(&path) {
-                    continue;
-                }
-                let old = fs::metadata(&path)
-                    .and_then(|m| m.modified())
-                    .map(|t| now.duration_since(t).unwrap_or_default() > max_age)
-                    .unwrap_or(false);
-                if old && fs::remove_dir_all(&path).is_ok() {
-                    pruned += 1;
-                }
-            }
-        }
-
-        for sub in ["sessions", "contexts", "tasks"] {
-            if let Ok(rd) = fs::read_dir(self.root.join(sub)) {
-                for entry in rd.flatten() {
-                    let path = entry.path();
-                    let old = fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .map(|t| now.duration_since(t).unwrap_or_default() > max_age)
-                        .unwrap_or(false);
-                    if old && fs::remove_file(&path).is_ok() {
-                        pruned += 1;
-                    }
-                }
-            }
-        }
-
-        json!({ "pruned": pruned })
+        let (cmd_rm, meta_rm, freed_bytes) = rpc_mcp_core::retention::cleanup_workbench_storage(
+            &self.root,
+            retention_days,
+            max_total_mb,
+        );
+        json!({
+            "pruned": cmd_rm + meta_rm,
+            "commandsRemoved": cmd_rm,
+            "metaRemoved": meta_rm,
+            "freedBytes": freed_bytes,
+        })
     }
 }
 
@@ -946,15 +925,6 @@ pub async fn serve_workbench(cfg: WorkbenchConfig) -> Result<()> {
         cfg.pwsh_path.clone(),
         cfg.enable_delete_guard,
     )?);
-    let prune_engine = Arc::clone(&engine);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3600));
-        loop {
-            interval.tick().await;
-            let eng = Arc::clone(&prune_engine);
-            let _ = tokio::task::spawn_blocking(move || eng.prune()).await;
-        }
-    });
     let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port).parse()?;
     let app = build_router(cfg, engine);
     let listener = TcpListener::bind(addr).await?;

@@ -4,13 +4,12 @@ const $ = (id) => document.getElementById(id);
 let currentConfig = null;
 let selectedMode = "cloudflare-quick";
 let activeTab = "dashboard";
-let activeFilter = "all";
-let activitySearch = "";
 let activityPaused = false;
-let lastActivities = [];
-let lastStats = { total: 0, fsCount: 0, cmdCount: 0, securityCount: 0 };
-let pendingActivities = null;
-let lastActivitySignature = "";
+let dashboardRecent = [];
+let latestAllStats = { total: 0, fsCount: 0, cmdCount: 0, chromeCount: 0, securityCount: 0, errorCount: 0, todayCount: 0 };
+let latestActivityRevision = "";
+let actFetchSeq = 0;
+let actSearchTimer = null;
 let lastLogSignature = "";
 let isStarting = false;
 let isRestarting = false;
@@ -18,6 +17,32 @@ let lastRunning = false;
 let dismissedAlertMsg = "";
 let isZh = true;
 let toastTimer = null;
+let pollTimer = null;
+let pollIntervalMs = 2000;
+
+const actQuery = {
+  page: 1,
+  pageSize: 50,
+  preset: "all",
+  date: "",
+  timeFrom: "",
+  timeTo: "",
+  category: "all",
+  errorsOnly: false,
+  search: "",
+};
+
+let actPage = {
+  items: [],
+  page: 1,
+  pageSize: 50,
+  totalMatched: 0,
+  totalPages: 1,
+  allStats: { total: 0, fsCount: 0, cmdCount: 0, chromeCount: 0, securityCount: 0, errorCount: 0, todayCount: 0 },
+  scopedStats: { total: 0, fsCount: 0, cmdCount: 0, chromeCount: 0, securityCount: 0, errorCount: 0, todayCount: 0 },
+  availableDates: [],
+  revision: "",
+};
 
 const expandedIds = new Set();
 const commandDetailCache = new Map();
@@ -30,6 +55,7 @@ const I18N = {
     navWizard: "接入模式",
     navRoots: "目录与守卫",
     navLogs: "启动终端日志",
+    navSettings: "系统设置",
     envTitle: "本机依赖自检",
     trayHint: "关闭窗口自动缩入托盘，释放 WebView2 内存",
     unsavedChanges: "有未保存修改 · 点此保存",
@@ -70,18 +96,34 @@ const I18N = {
     stTotal: "总操作次数",
     stFs: "文件读写与搜索",
     stCmd: "终端命令与 Git",
+    stChrome: "浏览器自动化",
     stSec: "授权与守卫拦截",
-    activityHeading: "Gemini / ChatGPT 实时本地操作流",
-    searchPlaceholder: "搜索命令、路径、工具名...",
-    btnPause: "暂停刷新",
-    btnResume: "恢复刷新",
+    activityHeading: "Gemini / ChatGPT 本地操作流",
+    liveSyncing: "实时同步",
+    livePaused: "已暂停",
+    liveHistory: "历史视图",
+    pAll: "全部",
+    pToday: "今天",
+    pYesterday: "昨天",
+    p3d: "近3天",
+    p7d: "近7天",
+    p30d: "近30天",
+    searchPlaceholder: "搜索命令、路径、工具名（空格多词匹配）...",
+    btnPause: "暂停",
+    btnResume: "恢复",
     btnFlush: "立即刷新",
+    btnBackLatest: "返回最新",
+    btnResetFilters: "重置筛选",
     refresh: "刷新",
     fAll: "全部",
     fFs: "文件",
     fCmd: "命令",
     fChrome: "浏览器",
     fSec: "安全",
+    fErrorsOnly: "仅异常",
+    pgJump: "跳至",
+    todayLabel: "今天",
+    yesterdayLabel: "昨天",
     copy: "复制",
     reveal: "定位",
     openFolder: "打开",
@@ -137,6 +179,39 @@ const I18N = {
     toastStarted: "服务已启动",
     toastRestarted: "服务已重启",
     toastStopped: "服务已停止",
+    setStorageTitle: "存储占用与自动清理",
+    setStorageDesc: "自动按天数和体积上限清理过期日志与历史命令产物，兼顾历史回溯与磁盘空间安全。",
+    btnRefreshStorage: "刷新占用",
+    btnRunCleanup: "立即清理过期数据",
+    storageTotalLbl: "state/ 目录当前占用",
+    slAudit: "审计日志",
+    slCmd: "命令输出",
+    slMeta: "会话与任务",
+    slAux: "辅助日志",
+    swRetEnable: "启用后台自动清理",
+    swRetEnableDesc: "服务启动后自动执行一次，之后按设定周期在后台静默清理（正在运行的命令受锁保护不会被删）。",
+    lblRetInterval: "定时清理周期",
+    lblRetAuditDays: "审计日志保留天数",
+    lblRetWbDays: "命令输出与会话保留天数",
+    lblRetAuditMb: "单审计文件轮转上限 (MB)",
+    lblRetAuditFiles: "审计归档最大数量",
+    lblRetWbMb: "命令输出总磁盘上限 (MB)",
+    lblRetAuxMb: "辅助日志轮转上限 (MB)",
+    setUiTitle: "动态流与界面偏好",
+    lblUiPageSize: "动态流默认每页条数",
+    lblUiPoll: "实时状态轮询间隔",
+    lblUiLang: "界面语言",
+    btnResetSidebar: "重置侧边栏停靠布局",
+    setPortsTitle: "本地服务端口配置",
+    setPortsDesc: "如遇本机端口冲突可在此调整；修改端口后需重启服务生效。",
+    setAdvSummary: "高级能力与维护（视觉识别后端 / 目录快捷入口 / 密钥重置）",
+    setVisionSub: "视觉识别后端（Vision）",
+    lblVisionBackend: "识别模式",
+    setMaintSub: "目录与凭据维护",
+    btnOpenConfigDir: "打开配置目录",
+    btnOpenLogsDir: "打开日志目录",
+    btnRegenApproval: "重新生成 Owner Approval Key",
+    btnSaveSettings: "保存系统设置",
   },
   en: {
     navDashboard: "Dashboard",
@@ -144,6 +219,7 @@ const I18N = {
     navWizard: "Connection",
     navRoots: "Roots & Guards",
     navLogs: "Terminal Logs",
+    navSettings: "Settings",
     envTitle: "Local Environment",
     trayHint: "Closing releases WebView2 to tray (~6 MB idle)",
     unsavedChanges: "Unsaved · Click to save",
@@ -184,18 +260,34 @@ const I18N = {
     stTotal: "Total Actions",
     stFs: "File Ops & Search",
     stCmd: "Commands & Git",
-    stSec: "Auth & Guard Blocks",
-    activityHeading: "Live Gemini / ChatGPT Local Activity Stream",
-    searchPlaceholder: "Search command, path, tool...",
+    stChrome: "Browser Auto",
+    stSec: "Auth & Guards",
+    activityHeading: "Gemini / ChatGPT Local Activity Stream",
+    liveSyncing: "Live",
+    livePaused: "Paused",
+    liveHistory: "History",
+    pAll: "All",
+    pToday: "Today",
+    pYesterday: "Yesterday",
+    p3d: "3D",
+    p7d: "7D",
+    p30d: "30D",
+    searchPlaceholder: "Search command, path, tool (space for AND)...",
     btnPause: "Pause",
     btnResume: "Resume",
     btnFlush: "Refresh now",
+    btnBackLatest: "Back to latest",
+    btnResetFilters: "Reset filters",
     refresh: "Refresh",
     fAll: "All",
     fFs: "Files",
     fCmd: "Commands",
     fChrome: "Browser",
     fSec: "Security",
+    fErrorsOnly: "Errors",
+    pgJump: "Go to",
+    todayLabel: "Today",
+    yesterdayLabel: "Yesterday",
     copy: "Copy",
     reveal: "Reveal",
     openFolder: "Open",
@@ -251,6 +343,39 @@ const I18N = {
     toastStarted: "Services started",
     toastRestarted: "Services restarted",
     toastStopped: "Services stopped",
+    setStorageTitle: "Storage Usage & Auto Cleanup",
+    setStorageDesc: "Automatically prune expired logs and workbench artifacts by age and disk budget.",
+    btnRefreshStorage: "Refresh",
+    btnRunCleanup: "Clean Expired Now",
+    storageTotalLbl: "Current state/ disk usage",
+    slAudit: "Audit Logs",
+    slCmd: "Command Outputs",
+    slMeta: "Sessions & Tasks",
+    slAux: "Aux Logs",
+    swRetEnable: "Enable Background Auto Cleanup",
+    swRetEnableDesc: "Runs once shortly after startup and periodically thereafter (active locked commands are never deleted).",
+    lblRetInterval: "Cleanup Interval",
+    lblRetAuditDays: "Audit Log Retention",
+    lblRetWbDays: "Command Output Retention",
+    lblRetAuditMb: "Audit File Rotate Size (MB)",
+    lblRetAuditFiles: "Max Audit Archives",
+    lblRetWbMb: "Command Outputs Budget (MB)",
+    lblRetAuxMb: "Aux Log Rotate Size (MB)",
+    setUiTitle: "Activity Stream & UI Preferences",
+    lblUiPageSize: "Default Page Size",
+    lblUiPoll: "Live Polling Interval",
+    lblUiLang: "Interface Language",
+    btnResetSidebar: "Reset Sidebar Layout",
+    setPortsTitle: "Local Service Ports",
+    setPortsDesc: "Adjust local loopback ports if there is a port conflict; restart services to apply.",
+    setAdvSummary: "Advanced & Maintenance (Vision Backend / Quick Folders / Key Reset)",
+    setVisionSub: "Vision Backend",
+    lblVisionBackend: "Vision Mode",
+    setMaintSub: "Directories & Credentials",
+    btnOpenConfigDir: "Open Config Folder",
+    btnOpenLogsDir: "Open Logs Folder",
+    btnRegenApproval: "Regenerate Owner Approval Key",
+    btnSaveSettings: "Save Settings",
   },
 };
 
@@ -298,6 +423,12 @@ function switchTab(tabName) {
     "no-outer-scroll",
     tabName === "activity" || tabName === "logs"
   );
+  if (tabName === "activity" && (!actPage.revision || actPage.revision !== latestActivityRevision)) {
+    fetchActivityPage({ preserveScroll: false });
+  }
+  if (tabName === "settings") {
+    refreshStorageUsage();
+  }
 }
 
 /* =========================================================
@@ -646,6 +777,7 @@ function renderDetailHtml(item) {
   const cwd = detail?.cwd || item.cwd || "";
 
   let metaParts = [];
+  if (item.fullTime) metaParts.push(`<span>time: <code>${esc(item.fullTime)}</code></span>`);
   if (cwd) metaParts.push(`<span>cwd: <code>${esc(cwd)}</code></span>`);
   if (item.source) metaParts.push(`<span>source: <code>${esc(item.source)}</code></span>`);
   if (item.commandId) metaParts.push(`<span>id: <code>${esc(item.commandId)}</code></span>`);
@@ -709,7 +841,7 @@ function activityHtml(item) {
         <button class="act-qbtn" type="button" data-act="copy-full" data-id="${esc(item.id)}">${esc(t("copy"))}</button>
         ${isRevealablePath(item) ? `<button class="act-qbtn" type="button" data-act="reveal" data-id="${esc(item.id)}">${esc(t("reveal"))}</button>` : ""}
       </div>
-      <span class="act-time">${esc(item.time)}</span>
+      <span class="act-time" title="${esc(item.fullTime || item.time)}">${esc(item.time)}</span>
     </div>
     ${expanded ? renderDetailHtml(item) : ""}
   </div>`;
@@ -721,51 +853,233 @@ function miniActivityHtml(item) {
     <span class="act-badge ${b.cls}">${esc(b.label)}</span>
     <span class="act-tool">${esc(item.tool)}</span>
     <span class="act-target" title="${esc(item.target)}">${esc(item.target || "—")}</span>
-    <span class="act-time">${esc(item.time)}</span>
+    <span class="act-time" title="${esc(item.fullTime || item.time)}">${esc(item.time)}</span>
   </div>`;
 }
 
-function getFilteredActivities() {
-  const q = activitySearch.trim().toLowerCase();
-  return lastActivities.filter((x) => {
-    if (activeFilter !== "all" && x.category !== activeFilter) return false;
-    if (!q) return true;
-    return (
-      (x.tool || "").toLowerCase().includes(q) ||
-      (x.target || "").toLowerCase().includes(q) ||
-      (x.fullTarget || "").toLowerCase().includes(q) ||
-      (x.cwd || "").toLowerCase().includes(q) ||
-      (x.platform || "").toLowerCase().includes(q)
-    );
-  });
+function localDateIso(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-function renderActivityListDom() {
-  const full = $("activity-list");
-  const prevScrollTop = full.scrollTop;
-  const codeScrolls = new Map();
-  full.querySelectorAll("[data-scroll-key]").forEach((el) => {
-    if (el.scrollTop > 0) codeScrolls.set(el.dataset.scrollKey, el.scrollTop);
-  });
+function isLiveCompatibleView() {
+  return (
+    actQuery.page === 1 &&
+    !actQuery.date &&
+    !actQuery.timeFrom &&
+    !actQuery.timeTo &&
+    !["yesterday", "custom"].includes(actQuery.preset)
+  );
+}
 
-  if (!lastActivities.length) {
+function hasActiveFilters() {
+  return (
+    actQuery.preset !== "all" ||
+    Boolean(actQuery.date) ||
+    Boolean(actQuery.timeFrom) ||
+    Boolean(actQuery.timeTo) ||
+    actQuery.category !== "all" ||
+    actQuery.errorsOnly ||
+    Boolean(actQuery.search.trim())
+  );
+}
+
+function updateLiveChipAndFilterUi() {
+  const chip = $("activity-live-chip");
+  const txt = $("activity-live-text");
+  chip.classList.remove("live", "paused", "history");
+  if (activityPaused) {
+    chip.classList.add("paused");
+    txt.textContent = t("livePaused");
+  } else if (!isLiveCompatibleView()) {
+    chip.classList.add("history");
+    txt.textContent = t("liveHistory");
+  } else {
+    chip.classList.add("live");
+    txt.textContent = t("liveSyncing");
+  }
+
+  $("btn-reset-filters").classList.toggle("hidden", !hasActiveFilters());
+  $("btn-clear-search").classList.toggle("hidden", !actQuery.search);
+
+  document.querySelectorAll("#activity-stat-strip .stat-btn").forEach((b) => {
+    b.classList.toggle("active", b.dataset.statCat === actQuery.category);
+  });
+  document.querySelectorAll("#activity-filters .fpill").forEach((b) => {
+    b.classList.toggle("active", b.dataset.filter === actQuery.category);
+  });
+  document.querySelectorAll("#activity-presets .seg-btn").forEach((b) => {
+    b.classList.toggle("active", !actQuery.date && b.dataset.preset === actQuery.preset);
+  });
+  $("btn-errors-only").classList.toggle("active", actQuery.errorsOnly);
+}
+
+function updateScopedCounts(scoped) {
+  const s = scoped || {};
+  $("fcnt-all").textContent = String(s.total || 0);
+  $("fcnt-fs").textContent = String(s.fsCount || 0);
+  $("fcnt-cmd").textContent = String(s.cmdCount || 0);
+  $("fcnt-chrome").textContent = String(s.chromeCount || 0);
+  $("fcnt-security").textContent = String(s.securityCount || 0);
+  $("fcnt-err").textContent = String(s.errorCount || 0);
+}
+
+function updateDatePickerBounds(availableDates) {
+  const inp = $("activity-date");
+  if (!availableDates || !availableDates.length) {
+    inp.removeAttribute("min");
+    inp.removeAttribute("max");
+    return;
+  }
+  // availableDates is sorted newest first
+  inp.max = availableDates[0].date;
+  inp.min = availableDates[availableDates.length - 1].date;
+}
+
+function buildPageList(current, total) {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1);
+  }
+  const pages = [1];
+  const left = Math.max(2, current - 1);
+  const right = Math.min(total - 1, current + 1);
+  if (left > 2) pages.push("...");
+  for (let p = left; p <= right; p++) pages.push(p);
+  if (right < total - 1) pages.push("...");
+  pages.push(total);
+  return pages;
+}
+
+function renderPaginationDom() {
+  const totalMatched = actPage.totalMatched || 0;
+  const allTotal = actPage.allStats?.total || 0;
+  const page = actPage.page || 1;
+  const pageSize = actPage.pageSize || 50;
+  const totalPages = Math.max(1, actPage.totalPages || 1);
+
+  const summary = $("pg-summary");
+  if (totalMatched === 0) {
+    summary.textContent = isZh ? "共 0 条" : "0 items";
+  } else {
+    const start = (page - 1) * pageSize + 1;
+    const end = Math.min(page * pageSize, totalMatched);
+    if (hasActiveFilters() && allTotal > totalMatched) {
+      summary.textContent = isZh
+        ? `第 ${start}–${end} 条 / 共 ${totalMatched} 条（全量 ${allTotal} 条）`
+        : `${start}–${end} of ${totalMatched} (${allTotal} total)`;
+    } else {
+      summary.textContent = isZh
+        ? `第 ${start}–${end} 条 / 共 ${totalMatched} 条`
+        : `${start}–${end} of ${totalMatched}`;
+    }
+  }
+
+  $("pg-size").value = String(pageSize);
+  $("pg-jump").value = String(page);
+  $("pg-jump").max = String(totalPages);
+  $("pg-total").textContent = String(totalPages);
+
+  const btnWrap = $("pg-buttons");
+  const pages = buildPageList(page, totalPages);
+  const parts = [];
+  parts.push(`<button class="pg-btn" type="button" data-pg="1" ${page <= 1 ? "disabled" : ""} title="${isZh ? "首页" : "First"}">«</button>`);
+  parts.push(`<button class="pg-btn" type="button" data-pg="${page - 1}" ${page <= 1 ? "disabled" : ""} title="${isZh ? "上一页" : "Previous"}">‹</button>`);
+  for (const p of pages) {
+    if (p === "...") {
+      parts.push(`<span class="pg-ellipsis">…</span>`);
+    } else {
+      parts.push(`<button class="pg-btn ${p === page ? "active" : ""}" type="button" data-pg="${p}">${p}</button>`);
+    }
+  }
+  parts.push(`<button class="pg-btn" type="button" data-pg="${page + 1}" ${page >= totalPages ? "disabled" : ""} title="${isZh ? "下一页" : "Next"}">›</button>`);
+  parts.push(`<button class="pg-btn" type="button" data-pg="${totalPages}" ${page >= totalPages ? "disabled" : ""} title="${isZh ? "末页" : "Last"}">»</button>`);
+  btnWrap.innerHTML = parts.join("");
+}
+
+function renderActivityListDom({ preserveScroll = true } = {}) {
+  const full = $("activity-list");
+  const prevScrollTop = preserveScroll ? full.scrollTop : 0;
+  const codeScrolls = new Map();
+  if (preserveScroll) {
+    full.querySelectorAll("[data-scroll-key]").forEach((el) => {
+      if (el.scrollTop > 0) codeScrolls.set(el.dataset.scrollKey, el.scrollTop);
+    });
+  }
+
+  const items = actPage.items || [];
+  if (!actPage.allStats?.total && !items.length) {
     full.innerHTML = `<div class="sec-desc" style="margin:8px 0;">${esc(t("noActivity"))}</div>`;
+    renderPaginationDom();
     return;
   }
-  const filtered = getFilteredActivities();
-  if (!filtered.length) {
+  if (!items.length) {
     full.innerHTML = `<div class="sec-desc" style="margin:8px 0;">${esc(t("noMatchActivity"))}</div>`;
+    renderPaginationDom();
     return;
   }
-  full.innerHTML = filtered.map(activityHtml).join("");
-  if (prevScrollTop > 0) {
-    full.scrollTop = prevScrollTop;
+
+  const todayStr = localDateIso(0);
+  const yesterdayStr = localDateIso(-1);
+  let lastDate = null;
+  const htmlParts = [];
+
+  for (const item of items) {
+    const d = item.date || "";
+    if (d && d !== lastDate) {
+      lastDate = d;
+      let tag = "";
+      if (d === todayStr) tag = `<span class="act-date-tag">${esc(t("todayLabel"))}</span>`;
+      else if (d === yesterdayStr) tag = `<span class="act-date-tag">${esc(t("yesterdayLabel"))}</span>`;
+      htmlParts.push(`<div class="act-date-divider"><span class="act-date-badge">${esc(d)}${tag}</span></div>`);
+    }
+    htmlParts.push(activityHtml(item));
   }
+
+  full.innerHTML = htmlParts.join("");
+  full.scrollTop = prevScrollTop;
   if (codeScrolls.size > 0) {
     full.querySelectorAll("[data-scroll-key]").forEach((el) => {
       const saved = codeScrolls.get(el.dataset.scrollKey);
       if (saved != null) el.scrollTop = saved;
     });
+  }
+  renderPaginationDom();
+}
+
+async function fetchActivityPage({ preserveScroll = false } = {}) {
+  if (!invoke) return;
+  const seq = ++actFetchSeq;
+  try {
+    const res = await invoke("query_activities", {
+      query: {
+        page: actQuery.page,
+        pageSize: actQuery.pageSize,
+        preset: actQuery.preset,
+        date: actQuery.date || null,
+        timeFrom: actQuery.timeFrom || null,
+        timeTo: actQuery.timeTo || null,
+        category: actQuery.category,
+        errorsOnly: actQuery.errorsOnly,
+        search: actQuery.search || null,
+      },
+    });
+    if (seq !== actFetchSeq) return; // Discard stale response
+    actPage = res;
+    actQuery.page = res.page;
+    latestAllStats = res.allStats || latestAllStats;
+    latestActivityRevision = res.revision || latestActivityRevision;
+    updateStatsCards(latestAllStats);
+    updateScopedCounts(res.scopedStats);
+    updateDatePickerBounds(res.availableDates);
+    updateLiveChipAndFilterUi();
+    $("activity-pending-bar").classList.add("hidden");
+    renderActivityListDom({ preserveScroll });
+  } catch (e) {
+    showAlert(String(e));
   }
 }
 
@@ -775,7 +1089,7 @@ async function ensureCommandDetail(item, force = false) {
   if (!force && cached && cached.state !== "running") return;
   if (commandDetailLoading.has(item.commandId)) return;
   commandDetailLoading.add(item.commandId);
-  renderActivityListDom();
+  renderActivityListDom({ preserveScroll: true });
   try {
     const detail = await invoke("get_command_detail", { commandId: item.commandId });
     commandDetailCache.set(item.commandId, detail);
@@ -793,69 +1107,109 @@ async function ensureCommandDetail(item, force = false) {
     });
   } finally {
     commandDetailLoading.delete(item.commandId);
-    renderActivityListDom();
+    renderActivityListDom({ preserveScroll: true });
   }
 }
 
-function updateStatsAndMini(items, stats) {
-  $("activity-count-badge").textContent = String(stats?.total || 0);
-  $("st-total").textContent = String(stats?.total || 0);
-  $("st-fs").textContent = String(stats?.fsCount || 0);
-  $("st-cmd").textContent = String(stats?.cmdCount || 0);
-  $("st-sec").textContent = String(stats?.securityCount || 0);
+function updateStatsCards(stats) {
+  const s = stats || {};
+  $("activity-count-badge").textContent = String(s.total || 0);
+  $("st-total").textContent = String(s.total || 0);
+  $("st-fs").textContent = String(s.fsCount || 0);
+  $("st-cmd").textContent = String(s.cmdCount || 0);
+  $("st-chrome").textContent = String(s.chromeCount || 0);
+  $("st-sec").textContent = String(s.securityCount || 0);
+  const todayCnt = s.todayCount || 0;
+  $("st-today").textContent = isZh ? `今日 +${todayCnt}` : `Today +${todayCnt}`;
+}
 
+function updateDashboardMini(items) {
+  dashboardRecent = items || [];
   const mini = $("mini-activity-feed");
-  if (!items.length) {
+  if (!dashboardRecent.length) {
     mini.innerHTML = `<div class="sec-desc" style="margin:8px 0;">${esc(t("noActivity"))}</div>`;
   } else {
-    mini.innerHTML = items.slice(0, 6).map(miniActivityHtml).join("");
+    mini.innerHTML = dashboardRecent.slice(0, 6).map(miniActivityHtml).join("");
   }
 }
 
-function renderActivities(items, stats, force = false) {
-  const safeItems = items || [];
-  const safeStats = stats || { total: 0, fsCount: 0, cmdCount: 0, securityCount: 0 };
-  const tailItem = safeItems[safeItems.length - 1];
-  const sig = `${isZh}:${activeFilter}:${activitySearch}:${safeStats.total}:${safeStats.fsCount}:${safeStats.cmdCount}:${safeStats.securityCount}:${safeItems.length}:${safeItems[0]?.id || ""}:${tailItem?.id || ""}`;
+function handleStatusActivities(recentItems, stats, revision) {
+  if (stats) latestAllStats = stats;
+  updateStatsCards(latestAllStats);
+  updateDashboardMini(recentItems);
 
-  if (!force && sig === lastActivitySignature) {
+  const rev = revision || "";
+  const changed = rev !== latestActivityRevision;
+  if (changed) {
+    latestActivityRevision = rev;
+  }
+
+  if (activeTab !== "activity") {
     return;
   }
 
-  // Always update badges/stats & dashboard mini preview
-  updateStatsAndMini(safeItems, safeStats);
+  if (!actPage.revision) {
+    fetchActivityPage({ preserveScroll: false });
+    return;
+  }
 
-  // Protect user text selection or paused state on the full activity list
-  if (!force && (activityPaused || hasSelectionInActivityList())) {
-    pendingActivities = { items: safeItems, stats: safeStats };
+  if (!changed) {
+    return;
+  }
+
+  const liveView = isLiveCompatibleView();
+  if (liveView && !activityPaused && !hasSelectionInActivityList()) {
+    fetchActivityPage({ preserveScroll: true });
+  } else {
     $("activity-pending-bar").classList.remove("hidden");
-    $("activity-pending-text").textContent = activityPaused
-      ? isZh
+    const btnFlush = $("btn-flush-activity");
+    if (activityPaused) {
+      $("activity-pending-text").textContent = isZh
         ? "已暂停自动刷新，有新动态到达"
-        : "Auto-refresh paused · new activity available"
-      : isZh
+        : "Auto-refresh paused · new activity available";
+      btnFlush.textContent = t("btnFlush");
+    } else if (hasSelectionInActivityList()) {
+      $("activity-pending-text").textContent = isZh
         ? "检测到正在划选文本，已暂缓刷新列表"
         : "Selection active · list refresh deferred";
-    return;
+      btnFlush.textContent = t("btnFlush");
+    } else {
+      $("activity-pending-text").textContent = isZh
+        ? "正在浏览历史 / 分页视图，有新操作到达"
+        : "Browsing history / page · new operations arrived";
+      btnFlush.textContent = t("btnBackLatest");
+    }
   }
+}
 
-  lastActivities = safeItems;
-  lastStats = safeStats;
-  pendingActivities = null;
-  $("activity-pending-bar").classList.add("hidden");
-  lastActivitySignature = sig;
-  renderActivityListDom();
+function resetActivityFilters({ fetch = true } = {}) {
+  actQuery.page = 1;
+  actQuery.preset = "all";
+  actQuery.date = "";
+  actQuery.timeFrom = "";
+  actQuery.timeTo = "";
+  actQuery.category = "all";
+  actQuery.errorsOnly = false;
+  actQuery.search = "";
+  $("activity-date").value = "";
+  $("activity-time-from").value = "";
+  $("activity-time-to").value = "";
+  $("activity-search").value = "";
+  updateLiveChipAndFilterUi();
+  if (fetch) {
+    return fetchActivityPage({ preserveScroll: false });
+  }
+  return Promise.resolve();
 }
 
 function flushPendingActivities() {
   activityPaused = false;
   updatePauseBtn();
-  if (pendingActivities) {
-    const p = pendingActivities;
-    pendingActivities = null;
-    renderActivities(p.items, p.stats, true);
+  $("activity-pending-bar").classList.add("hidden");
+  if (!isLiveCompatibleView()) {
+    resetActivityFilters({ fetch: true });
   } else {
-    $("activity-pending-bar").classList.add("hidden");
+    fetchActivityPage({ preserveScroll: true });
   }
 }
 
@@ -863,6 +1217,7 @@ function updatePauseBtn() {
   const btn = $("btn-pause-activity");
   btn.textContent = activityPaused ? t("btnResume") : t("btnPause");
   btn.classList.toggle("active-toggle", activityPaused);
+  updateLiveChipAndFilterUi();
 }
 
 function renderLogs(logs) {
@@ -901,10 +1256,54 @@ function applyLanguage() {
     if (I18N.zh[k]) el.textContent = t(k);
   });
   $("activity-search").placeholder = t("searchPlaceholder");
+  const pgSize = $("pg-size");
+  if (pgSize) {
+    pgSize.options[0].textContent = isZh ? "50 / 页" : "50 / page";
+    pgSize.options[1].textContent = isZh ? "100 / 页" : "100 / page";
+    pgSize.options[2].textContent = isZh ? "200 / 页" : "200 / page";
+  }
   updatePauseBtn();
+  updateStatsCards(latestAllStats);
   applySidebarLayout();
   renderRoots();
-  renderActivityListDom();
+  renderActivityListDom({ preserveScroll: true });
+}
+
+function formatBytes(bytes) {
+  const b = Number(bytes) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+async function refreshStorageUsage() {
+  if (!invoke) return;
+  try {
+    const u = await invoke("get_storage_usage");
+    const total = u.totalBytes || 0;
+    $("st-disk-total").textContent = formatBytes(total);
+    $("st-disk-audit").textContent = `${formatBytes(u.auditBytes)} (${u.auditFiles || 0})`;
+    $("st-disk-cmd").textContent = `${formatBytes(u.workbenchCommandsBytes)} (${u.workbenchCommandsCount || 0})`;
+    $("st-disk-meta").textContent = `${formatBytes(u.workbenchMetaBytes)} (${u.workbenchMetaFiles || 0})`;
+    $("st-disk-aux").textContent = `${formatBytes(u.auxLogsBytes)} (${u.auxLogsFiles || 0})`;
+
+    const pct = (n) => (total > 0 ? Math.max(n > 0 ? 1.5 : 0, (n / total) * 100) : 0);
+    $("bar-audit").style.width = `${pct(u.auditBytes)}%`;
+    $("bar-cmd").style.width = `${pct(u.workbenchCommandsBytes)}%`;
+    $("bar-meta").style.width = `${pct(u.workbenchMetaBytes)}%`;
+    $("bar-aux").style.width = `${pct(u.auxLogsBytes)}%`;
+  } catch (e) {
+    showAlert(String(e));
+  }
+}
+
+function restartPollTimer(ms) {
+  const next = Math.max(1000, Math.min(10000, Number(ms) || 2000));
+  if (pollTimer && pollIntervalMs === next) return;
+  pollIntervalMs = next;
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(refreshLive, pollIntervalMs);
 }
 
 function applyConfigToUi(cfg) {
@@ -925,8 +1324,61 @@ function applyConfigToUi(cfg) {
   $("chk-commands").checked = cfg.gateway?.enableCommands !== false;
   $("chk-chrome").checked = Boolean(cfg.gateway?.enableChrome);
   $("inp-approval-key").value = cfg.gateway?.approvalKey || "";
+
+  // Retention & storage settings
+  const ret = cfg.retention || {};
+  $("chk-ret-enabled").checked = ret.enabled !== false;
+  $("cfg-ret-interval").value = String(ret.intervalHours ?? 6);
+  $("cfg-ret-audit-days").value = String(ret.auditRetentionDays ?? 30);
+  $("cfg-ret-wb-days").value = String(ret.workbenchRetentionDays ?? 7);
+  $("cfg-ret-audit-mb").value = String(ret.auditMaxFileMb ?? 10);
+  $("cfg-ret-audit-files").value = String(ret.auditMaxFiles ?? 5);
+  $("cfg-ret-wb-mb").value = String(ret.workbenchMaxTotalMb ?? 200);
+  $("cfg-ret-aux-mb").value = String(ret.auxLogMaxMb ?? 5);
+
+  // UI preferences
+  const ui = cfg.ui || {};
+  const defPageSize = Number(ui.defaultPageSize) || 50;
+  $("cfg-ui-pagesize").value = String(defPageSize);
+  if (actQuery.pageSize !== defPageSize) {
+    actQuery.pageSize = defPageSize;
+    actQuery.page = 1;
+    actPage.revision = "";
+  }
+  const pollMs = Number(ui.pollIntervalMs) || 2000;
+  $("cfg-ui-poll").value = String(pollMs);
+  $("cfg-ui-lang").value = isZh ? "zh" : "en";
+  restartPollTimer(pollMs);
+
+  // Local ports
+  const lp = cfg.localPorts || {};
+  $("cfg-port-fs").value = String(lp.fsBearer ?? 18849);
+  $("cfg-port-wb").value = String(lp.workbench ?? 18623);
+  $("cfg-port-chrome-mcp").value = String(lp.chromeMcp ?? 18619);
+  $("cfg-port-chrome-cdp").value = String(lp.chromeCdp ?? 9222);
+
+  // Vision backend
+  $("cfg-vision-backend").value = cfg.guardsAndHooks?.visionBackend || "auto";
+  $("cfg-gemini-key").value = cfg.guardsAndHooks?.geminiApiKey || "";
+  $("cfg-openai-key").value = cfg.guardsAndHooks?.openaiApiKey || "";
+
   setDirty(false);
   applyLanguage();
+}
+
+function collectRetentionFromUi() {
+  const rawAuditDays = Number($("cfg-ret-audit-days").value);
+  return {
+    ...(currentConfig?.retention || {}),
+    enabled: $("chk-ret-enabled").checked,
+    intervalHours: Number($("cfg-ret-interval").value) || 6,
+    auditRetentionDays: Number.isFinite(rawAuditDays) ? rawAuditDays : 30,
+    auditMaxFileMb: Number($("cfg-ret-audit-mb").value) || 10,
+    auditMaxFiles: Number($("cfg-ret-audit-files").value) || 5,
+    workbenchRetentionDays: Number($("cfg-ret-wb-days").value) || 7,
+    workbenchMaxTotalMb: Number($("cfg-ret-wb-mb").value) || 200,
+    auxLogMaxMb: Number($("cfg-ret-aux-mb").value) || 5,
+  };
 }
 
 function collectConfigFromUi() {
@@ -945,6 +1397,22 @@ function collectConfigFromUi() {
     guardsAndHooks: {
       ...currentConfig.guardsAndHooks,
       enableDeleteGuard: $("chk-delete-guard").checked,
+      visionBackend: $("cfg-vision-backend").value || "auto",
+      geminiApiKey: $("cfg-gemini-key").value.trim(),
+      openaiApiKey: $("cfg-openai-key").value.trim(),
+    },
+    localPorts: {
+      ...(currentConfig.localPorts || {}),
+      fsBearer: Number($("cfg-port-fs").value) || 18849,
+      workbench: Number($("cfg-port-wb").value) || 18623,
+      chromeMcp: Number($("cfg-port-chrome-mcp").value) || 18619,
+      chromeCdp: Number($("cfg-port-chrome-cdp").value) || 9222,
+    },
+    retention: collectRetentionFromUi(),
+    ui: {
+      ...(currentConfig.ui || {}),
+      defaultPageSize: Number($("cfg-ui-pagesize").value) || 50,
+      pollIntervalMs: Number($("cfg-ui-poll").value) || 2000,
     },
     cloudflare: {
       ...currentConfig.cloudflare,
@@ -1043,7 +1511,7 @@ function applyStatus(st) {
     $("env-node").classList.toggle("ok", st.env.nodeOk);
   }
   renderLogs(st.logs);
-  renderActivities(st.activities, st.stats);
+  handleStatusActivities(st.activities, st.stats, st.activityRevision);
 
   if (st.lastError && st.lastError !== dismissedAlertMsg) {
     showAlert(st.lastError);
@@ -1070,19 +1538,95 @@ $("btn-alert-close").addEventListener("click", () => {
 
 $("dirty-tag").addEventListener("click", () => persist());
 
-// Activity filters, search, pause, flush
-document.querySelectorAll("#activity-filters .fpill").forEach((btn) => {
+// Activity interactive stat cards (click to filter category)
+document.querySelectorAll("#activity-stat-strip .stat-btn").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll("#activity-filters .fpill").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    activeFilter = btn.dataset.filter;
-    renderActivityListDom();
+    const cat = btn.dataset.statCat || "all";
+    actQuery.category = actQuery.category === cat && cat !== "all" ? "all" : cat;
+    actQuery.page = 1;
+    updateLiveChipAndFilterUi();
+    fetchActivityPage({ preserveScroll: false });
   });
 });
 
+// Activity time presets
+document.querySelectorAll("#activity-presets .seg-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    actQuery.preset = btn.dataset.preset || "all";
+    actQuery.date = "";
+    $("activity-date").value = "";
+    actQuery.page = 1;
+    updateLiveChipAndFilterUi();
+    fetchActivityPage({ preserveScroll: false });
+  });
+});
+
+// Specific date & time-of-day filters
+$("activity-date").addEventListener("change", (e) => {
+  const val = (e.target.value || "").trim();
+  if (val) {
+    actQuery.preset = "custom";
+    actQuery.date = val;
+  } else {
+    actQuery.preset = "all";
+    actQuery.date = "";
+  }
+  actQuery.page = 1;
+  updateLiveChipAndFilterUi();
+  fetchActivityPage({ preserveScroll: false });
+});
+
+$("activity-time-from").addEventListener("change", (e) => {
+  actQuery.timeFrom = (e.target.value || "").trim();
+  actQuery.page = 1;
+  updateLiveChipAndFilterUi();
+  fetchActivityPage({ preserveScroll: false });
+});
+
+$("activity-time-to").addEventListener("change", (e) => {
+  actQuery.timeTo = (e.target.value || "").trim();
+  actQuery.page = 1;
+  updateLiveChipAndFilterUi();
+  fetchActivityPage({ preserveScroll: false });
+});
+
+// Activity category pills, errors-only, reset, debounced search, pause, flush
+document.querySelectorAll("#activity-filters .fpill").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    actQuery.category = btn.dataset.filter || "all";
+    actQuery.page = 1;
+    updateLiveChipAndFilterUi();
+    fetchActivityPage({ preserveScroll: false });
+  });
+});
+
+$("btn-errors-only").addEventListener("click", () => {
+  actQuery.errorsOnly = !actQuery.errorsOnly;
+  actQuery.page = 1;
+  updateLiveChipAndFilterUi();
+  fetchActivityPage({ preserveScroll: false });
+});
+
+$("btn-reset-filters").addEventListener("click", () => {
+  resetActivityFilters({ fetch: true });
+});
+
 $("activity-search").addEventListener("input", (e) => {
-  activitySearch = e.target.value || "";
-  renderActivityListDom();
+  actQuery.search = e.target.value || "";
+  actQuery.page = 1;
+  updateLiveChipAndFilterUi();
+  clearTimeout(actSearchTimer);
+  actSearchTimer = setTimeout(() => {
+    fetchActivityPage({ preserveScroll: false });
+  }, 180);
+});
+
+$("btn-clear-search").addEventListener("click", () => {
+  actQuery.search = "";
+  $("activity-search").value = "";
+  actQuery.page = 1;
+  updateLiveChipAndFilterUi();
+  fetchActivityPage({ preserveScroll: false });
 });
 
 $("btn-pause-activity").addEventListener("click", () => {
@@ -1096,15 +1640,52 @@ $("btn-pause-activity").addEventListener("click", () => {
 
 $("btn-flush-activity").addEventListener("click", flushPendingActivities);
 
+// Pagination controls
+$("pg-buttons").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-pg]");
+  if (!btn || btn.disabled) return;
+  const targetPage = Number(btn.dataset.pg);
+  if (!Number.isFinite(targetPage) || targetPage < 1 || targetPage === actQuery.page) return;
+  actQuery.page = targetPage;
+  fetchActivityPage({ preserveScroll: false });
+});
+
+$("pg-size").addEventListener("change", (e) => {
+  const nextSize = Number(e.target.value) || 50;
+  actQuery.pageSize = nextSize;
+  actQuery.page = 1;
+  fetchActivityPage({ preserveScroll: false });
+});
+
+function commitPageJump() {
+  const totalPages = Math.max(1, actPage.totalPages || 1);
+  const raw = Number($("pg-jump").value);
+  const clamped = Number.isFinite(raw) ? clamp(Math.floor(raw), 1, totalPages) : actQuery.page;
+  $("pg-jump").value = String(clamped);
+  if (clamped !== actQuery.page) {
+    actQuery.page = clamped;
+    fetchActivityPage({ preserveScroll: false });
+  }
+}
+
+$("pg-jump").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    commitPageJump();
+  }
+});
+$("pg-jump").addEventListener("change", commitPageJump);
+
 // Event delegation on full activity list
 $("activity-list").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-act]");
   if (!btn) return;
   const act = btn.dataset.act;
+  const items = actPage.items || [];
 
   if (act === "copy-full") {
     e.stopPropagation();
-    const item = lastActivities.find((x) => x.id === btn.dataset.id);
+    const item = items.find((x) => x.id === btn.dataset.id);
     if (!item) return;
     const cached = item.commandId ? commandDetailCache.get(item.commandId) : null;
     const text = cached?.command || item.fullTarget || item.target || "";
@@ -1125,7 +1706,7 @@ $("activity-list").addEventListener("click", async (e) => {
 
   if (act === "refresh-detail") {
     e.stopPropagation();
-    const item = lastActivities.find((x) => x.id === btn.dataset.id);
+    const item = items.find((x) => x.id === btn.dataset.id);
     if (!item || !item.commandId) return;
     ensureCommandDetail(item, true);
     return;
@@ -1134,7 +1715,7 @@ $("activity-list").addEventListener("click", async (e) => {
   if (act === "reveal") {
     e.stopPropagation();
     if (!invoke) return;
-    const item = lastActivities.find((x) => x.id === btn.dataset.id);
+    const item = items.find((x) => x.id === btn.dataset.id);
     if (!item) return;
     try {
       await invoke("reveal_in_explorer", { path: item.fullTarget || item.target });
@@ -1148,14 +1729,14 @@ $("activity-list").addEventListener("click", async (e) => {
     // Do not toggle if user just dragged to select text
     if (window.getSelection()?.toString().trim()) return;
     const id = btn.dataset.id;
-    const item = lastActivities.find((x) => x.id === id);
+    const item = items.find((x) => x.id === id);
     if (!item) return;
     if (expandedIds.has(id)) {
       expandedIds.delete(id);
-      renderActivityListDom();
+      renderActivityListDom({ preserveScroll: true });
     } else {
       expandedIds.add(id);
-      renderActivityListDom();
+      renderActivityListDom({ preserveScroll: true });
       if (item.commandId) {
         ensureCommandDetail(item);
       }
@@ -1163,22 +1744,16 @@ $("activity-list").addEventListener("click", async (e) => {
   }
 });
 
-// Dashboard mini activity click -> jump & expand
-$("mini-activity-feed").addEventListener("click", (e) => {
+// Dashboard mini activity click -> jump to latest page 1 & expand
+$("mini-activity-feed").addEventListener("click", async (e) => {
   const row = e.target.closest("[data-mini-id]");
   if (!row) return;
   const id = row.dataset.miniId;
-  const item = lastActivities.find((x) => x.id === id);
+  const item = dashboardRecent.find((x) => x.id === id);
   if (!item) return;
-  activeFilter = "all";
-  activitySearch = "";
-  $("activity-search").value = "";
-  document.querySelectorAll("#activity-filters .fpill").forEach((b) => {
-    b.classList.toggle("active", b.dataset.filter === "all");
-  });
   expandedIds.add(id);
   switchTab("activity");
-  renderActivityListDom();
+  await resetActivityFilters({ fetch: true });
   if (item.commandId) {
     ensureCommandDetail(item);
   }
@@ -1193,9 +1768,108 @@ document.querySelectorAll(".mode-card").forEach((card) => {
   });
 });
 
-document.querySelectorAll("#tab-wizard input, #tab-wizard select, #tab-roots input[type=checkbox]").forEach((el) => {
+document.querySelectorAll("#tab-wizard input, #tab-wizard select, #tab-roots input[type=checkbox], #tab-settings input, #tab-settings select").forEach((el) => {
   el.addEventListener("change", () => setDirty(true));
 });
+
+$("cfg-ui-lang").addEventListener("change", (e) => {
+  isZh = e.target.value === "zh";
+  applyLanguage();
+  setDirty(true);
+});
+
+$("btn-refresh-storage").addEventListener("click", () => {
+  refreshStorageUsage();
+  toast(isZh ? "已刷新存储占用" : "Storage usage refreshed");
+});
+
+$("btn-run-cleanup").addEventListener("click", async () => {
+  if (!invoke) return;
+  const btn = $("btn-run-cleanup");
+  btn.disabled = true;
+  try {
+    const rep = await invoke("run_manual_cleanup", { retention: collectRetentionFromUi() });
+    await refreshStorageUsage();
+    if (activeTab === "activity") {
+      await fetchActivityPage({ preserveScroll: false });
+    }
+    const freed = formatBytes(rep.freedBytes);
+    const totalRemoved =
+      (rep.auditFilesRemoved || 0) +
+      (rep.auditLinesTrimmed || 0) +
+      (rep.workbenchCommandsRemoved || 0) +
+      (rep.workbenchMetaRemoved || 0) +
+      (rep.auxFilesTrimmed || 0) +
+      (rep.oldBinariesRemoved || 0);
+    if (totalRemoved === 0 && !rep.freedBytes) {
+      toast(
+        rep.skippedActiveAudit
+          ? isZh
+            ? "无过期归档（外部后台正在写入活跃审计日志，已安全跳过）"
+            : "Nothing expired (active audit skipped while external agent is running)"
+          : isZh
+            ? "当前没有需要清理的过期数据"
+            : "No expired data to clean"
+      );
+    } else {
+      toast(
+        isZh
+          ? `清理完成，释放 ${freed}（命令 ${rep.workbenchCommandsRemoved}，归档 ${rep.auditFilesRemoved}，裁剪 ${rep.auditLinesTrimmed} 行）`
+          : `Cleaned ${freed} (cmds: ${rep.workbenchCommandsRemoved}, archives: ${rep.auditFilesRemoved}, lines: ${rep.auditLinesTrimmed})`
+      );
+    }
+  } catch (e) {
+    showAlert(String(e));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("btn-reset-sidebar").addEventListener("click", () => {
+  sbState = { ...SB_DEFAULT };
+  applySidebarLayout();
+  saveSidebarState();
+  toast(isZh ? "已恢复默认侧边栏布局" : "Sidebar layout reset");
+});
+
+$("btn-open-config-dir").addEventListener("click", async () => {
+  if (!invoke) return;
+  try {
+    await invoke("open_app_dir", { kind: "config" });
+  } catch (e) {
+    showAlert(String(e));
+  }
+});
+
+$("btn-open-logs-dir").addEventListener("click", async () => {
+  if (!invoke) return;
+  try {
+    await invoke("open_app_dir", { kind: "logs" });
+  } catch (e) {
+    showAlert(String(e));
+  }
+});
+
+$("btn-regen-approval").addEventListener("click", async () => {
+  if (!invoke || !currentConfig) return;
+  const ok = window.confirm(
+    isZh
+      ? "确定要重新生成 Owner Approval Key 吗？\n保存并重启服务后，新客户端授权需使用新密钥。"
+      : "Regenerate Owner Approval Key?\nAfter saving and restarting, new OAuth approvals will require the new key."
+  );
+  if (!ok) return;
+  try {
+    const nextKey = await invoke("regenerate_approval_key");
+    currentConfig.gateway.approvalKey = nextKey;
+    $("inp-approval-key").value = nextKey;
+    setDirty(true);
+    toast(isZh ? "已生成新密钥，请点击保存设置生效" : "New key generated; click Save to apply");
+  } catch (e) {
+    showAlert(String(e));
+  }
+});
+
+$("btn-save-settings").addEventListener("click", persist);
 
 document.querySelectorAll("[data-toggle]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -1217,6 +1891,7 @@ document.querySelectorAll("[data-copy]").forEach((btn) => {
 
 $("btn-lang").addEventListener("click", () => {
   isZh = !isZh;
+  $("cfg-ui-lang").value = isZh ? "zh" : "en";
   applyLanguage();
   setDirty(true);
 });
@@ -1355,7 +2030,7 @@ async function init() {
     const cfg = await invoke("load_config");
     applyConfigToUi(cfg);
     await refreshLive();
-    setInterval(refreshLive, 2000);
+    restartPollTimer(pollIntervalMs);
   } catch (e) {
     showAlert(String(e));
   }

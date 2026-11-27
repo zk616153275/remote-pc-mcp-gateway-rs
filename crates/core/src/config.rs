@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub vps: VpsConfig,
     pub local_ports: LocalPortsConfig,
     pub tokens: TokensConfig,
+    pub retention: RetentionConfig,
+    pub ui: UiPreferencesConfig,
     pub allowed_roots: Vec<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
@@ -163,6 +165,65 @@ pub struct TokensConfig {
     pub fs_token: String,
     pub workbench_token: String,
     pub chrome_token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RetentionConfig {
+    pub enabled: bool,
+    pub interval_hours: u64,
+    pub audit_retention_days: u32, // 0 = keep forever
+    pub audit_max_file_mb: u64,
+    pub audit_max_files: usize,
+    pub workbench_retention_days: u32,
+    pub workbench_max_total_mb: u64,
+    pub aux_log_max_mb: u64,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_hours: 6,
+            audit_retention_days: 30,
+            audit_max_file_mb: 10,
+            audit_max_files: 5,
+            workbench_retention_days: 7,
+            workbench_max_total_mb: 200,
+            aux_log_max_mb: 5,
+        }
+    }
+}
+
+impl RetentionConfig {
+    pub fn sanitized(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            interval_hours: self.interval_hours.clamp(1, 168),
+            audit_retention_days: self.audit_retention_days.min(3650),
+            audit_max_file_mb: self.audit_max_file_mb.clamp(1, 100),
+            audit_max_files: self.audit_max_files.clamp(1, 20),
+            workbench_retention_days: self.workbench_retention_days.clamp(1, 365),
+            workbench_max_total_mb: self.workbench_max_total_mb.clamp(10, 10_240),
+            aux_log_max_mb: self.aux_log_max_mb.clamp(1, 50),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UiPreferencesConfig {
+    pub default_page_size: usize,
+    pub poll_interval_ms: u64,
+}
+
+impl Default for UiPreferencesConfig {
+    fn default() -> Self {
+        Self {
+            default_page_size: 50,
+            poll_interval_ms: 2000,
+        }
+    }
 }
 
 impl AppConfig {

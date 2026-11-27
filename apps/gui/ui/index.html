@@ -64,6 +64,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
           <span class="nav-label" data-i18n="navLogs">启动终端日志</span>
         </button>
+        <button class="nav-btn" data-tab="settings" title="系统设置">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          <span class="nav-label" data-i18n="navSettings">系统设置</span>
+        </button>
       </nav>
 
       <!-- Environment readiness chips -->
@@ -217,33 +221,122 @@
 
       <!-- TAB 2: LIVE AI ACTIVITY FEED -->
       <section class="panel panel-fill" id="tab-activity">
-        <div class="stat-strip">
-          <div class="stat-box"><span class="stat-num" id="st-total">0</span><span class="stat-lbl" data-i18n="stTotal">总操作次数</span></div>
-          <div class="stat-box st-fs"><span class="stat-num" id="st-fs">0</span><span class="stat-lbl" data-i18n="stFs">文件读写与搜索</span></div>
-          <div class="stat-box st-cmd"><span class="stat-num" id="st-cmd">0</span><span class="stat-lbl" data-i18n="stCmd">终端命令与 Git</span></div>
-          <div class="stat-box st-sec"><span class="stat-num" id="st-sec">0</span><span class="stat-lbl" data-i18n="stSec">授权与守卫拦截</span></div>
+        <div class="stat-strip stat-strip-5" id="activity-stat-strip">
+          <button class="stat-box stat-btn active" type="button" data-stat-cat="all">
+            <div class="stat-head">
+              <span class="stat-lbl" data-i18n="stTotal">总操作次数</span>
+              <span class="stat-pill" id="st-today">今日 +0</span>
+            </div>
+            <span class="stat-num" id="st-total">0</span>
+          </button>
+          <button class="stat-box stat-btn st-fs" type="button" data-stat-cat="fs">
+            <div class="stat-head">
+              <span class="stat-lbl" data-i18n="stFs">文件读写与搜索</span>
+              <span class="stat-dot dot-fs"></span>
+            </div>
+            <span class="stat-num" id="st-fs">0</span>
+          </button>
+          <button class="stat-box stat-btn st-cmd" type="button" data-stat-cat="cmd">
+            <div class="stat-head">
+              <span class="stat-lbl" data-i18n="stCmd">终端命令与 Git</span>
+              <span class="stat-dot dot-cmd"></span>
+            </div>
+            <span class="stat-num" id="st-cmd">0</span>
+          </button>
+          <button class="stat-box stat-btn st-chrome" type="button" data-stat-cat="chrome">
+            <div class="stat-head">
+              <span class="stat-lbl" data-i18n="stChrome">浏览器自动化</span>
+              <span class="stat-dot dot-chrome"></span>
+            </div>
+            <span class="stat-num" id="st-chrome">0</span>
+          </button>
+          <button class="stat-box stat-btn st-sec" type="button" data-stat-cat="security">
+            <div class="stat-head">
+              <span class="stat-lbl" data-i18n="stSec">授权与守卫拦截</span>
+              <span class="stat-dot dot-sec"></span>
+            </div>
+            <span class="stat-num" id="st-sec">0</span>
+          </button>
         </div>
 
-        <div class="section section-fill">
-          <div class="sec-head activity-head">
-            <h2 data-i18n="activityHeading">Gemini / ChatGPT 实时本地操作流</h2>
-            <div class="activity-toolbar">
-              <input class="act-search" id="activity-search" type="search" placeholder="搜索命令、路径、工具名...">
-              <button class="btn btn-ghost btn-sm" id="btn-pause-activity" type="button" data-i18n="btnPause">暂停刷新</button>
-              <div class="filter-pills" id="activity-filters">
-                <button class="fpill active" data-filter="all" data-i18n="fAll">全部</button>
-                <button class="fpill" data-filter="fs" data-i18n="fFs">文件</button>
-                <button class="fpill" data-filter="cmd" data-i18n="fCmd">命令</button>
-                <button class="fpill" data-filter="chrome" data-i18n="fChrome">浏览器</button>
-                <button class="fpill" data-filter="security" data-i18n="fSec">安全</button>
+        <div class="section section-fill activity-card">
+          <div class="activity-header">
+            <div class="activity-top-row">
+              <div class="activity-title-wrap">
+                <h2 data-i18n="activityHeading">Gemini / ChatGPT 本地操作流</h2>
+                <span class="live-chip live" id="activity-live-chip">
+                  <i class="live-dot"></i>
+                  <span id="activity-live-text" data-i18n="liveSyncing">实时同步</span>
+                </span>
+              </div>
+              <div class="activity-time-controls">
+                <div class="preset-seg" id="activity-presets">
+                  <button class="seg-btn active" type="button" data-preset="all" data-i18n="pAll">全部</button>
+                  <button class="seg-btn" type="button" data-preset="today" data-i18n="pToday">今天</button>
+                  <button class="seg-btn" type="button" data-preset="yesterday" data-i18n="pYesterday">昨天</button>
+                  <button class="seg-btn" type="button" data-preset="3d" data-i18n="p3d">近3天</button>
+                  <button class="seg-btn" type="button" data-preset="7d" data-i18n="p7d">近7天</button>
+                  <button class="seg-btn" type="button" data-preset="30d" data-i18n="p30d">近30天</button>
+                </div>
+                <div class="date-time-box">
+                  <input class="act-date-input" id="activity-date" type="date" title="指定日期">
+                  <span class="dt-sep" aria-hidden="true">|</span>
+                  <input class="act-time-input" id="activity-time-from" type="time" title="起始时刻">
+                  <span class="dt-tilde">–</span>
+                  <input class="act-time-input" id="activity-time-to" type="time" title="结束时刻">
+                </div>
+                <button class="btn btn-ghost btn-sm" id="btn-pause-activity" type="button" data-i18n="btnPause">暂停</button>
+              </div>
+            </div>
+
+            <div class="activity-filter-row">
+              <div class="search-box">
+                <svg class="search-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                  <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input class="act-search" id="activity-search" type="text" placeholder="搜索命令、路径、工具名（空格多词匹配）...">
+                <button class="search-clear hidden" id="btn-clear-search" type="button" title="清空搜索">×</button>
+              </div>
+              <div class="filter-right">
+                <div class="filter-pills" id="activity-filters">
+                  <button class="fpill active" type="button" data-filter="all"><span data-i18n="fAll">全部</span><span class="fpill-cnt" id="fcnt-all">0</span></button>
+                  <button class="fpill" type="button" data-filter="fs"><span data-i18n="fFs">文件</span><span class="fpill-cnt" id="fcnt-fs">0</span></button>
+                  <button class="fpill" type="button" data-filter="cmd"><span data-i18n="fCmd">命令</span><span class="fpill-cnt" id="fcnt-cmd">0</span></button>
+                  <button class="fpill" type="button" data-filter="chrome"><span data-i18n="fChrome">浏览器</span><span class="fpill-cnt" id="fcnt-chrome">0</span></button>
+                  <button class="fpill" type="button" data-filter="security"><span data-i18n="fSec">安全</span><span class="fpill-cnt" id="fcnt-security">0</span></button>
+                </div>
+                <button class="fpill fpill-err" id="btn-errors-only" type="button">
+                  <span data-i18n="fErrorsOnly">仅异常</span>
+                  <span class="fpill-cnt" id="fcnt-err">0</span>
+                </button>
+                <button class="link-btn hidden" id="btn-reset-filters" type="button" data-i18n="btnResetFilters">重置筛选</button>
               </div>
             </div>
           </div>
+
           <div class="pending-bar hidden" id="activity-pending-bar">
             <span id="activity-pending-text">已暂停自动刷新，有新动态到达</span>
             <button class="link-btn" id="btn-flush-activity" type="button" data-i18n="btnFlush">立即刷新</button>
           </div>
+
           <div class="activity-list" id="activity-list"></div>
+
+          <div class="pagination-bar" id="activity-pagination">
+            <div class="pg-left">
+              <span class="pg-summary" id="pg-summary">共 0 条</span>
+              <select class="pg-size-select" id="pg-size" title="每页显示条数">
+                <option value="50" selected>50 / 页</option>
+                <option value="100">100 / 页</option>
+                <option value="200">200 / 页</option>
+              </select>
+            </div>
+            <div class="pg-buttons" id="pg-buttons"></div>
+            <div class="pg-jump-wrap">
+              <span class="pg-jump-lbl" data-i18n="pgJump">跳至</span>
+              <input class="pg-jump-input" id="pg-jump" type="number" min="1" value="1">
+              <span class="pg-jump-lbl">/ <span id="pg-total">1</span></span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -390,6 +483,202 @@
             <div class="term-dots"><span></span><span></span><span></span><small>rpc-mcp-core · live stdout</small></div>
             <div class="log-console" id="log-console"></div>
           </div>
+        </div>
+      </section>
+
+      <!-- TAB 6: SYSTEM SETTINGS & RETENTION -->
+      <section class="panel" id="tab-settings">
+        <!-- Card 1: Storage Usage & Auto Cleanup -->
+        <div class="section">
+          <div class="sec-head">
+            <div>
+              <h2 data-i18n="setStorageTitle">存储占用与自动清理</h2>
+              <p class="sec-desc" style="margin:3px 0 0;" data-i18n="setStorageDesc">自动按天数和体积上限清理过期日志与历史命令产物，兼顾历史回溯与磁盘空间安全。</p>
+            </div>
+            <div class="actions">
+              <button class="btn btn-ghost btn-sm" id="btn-refresh-storage" type="button" data-i18n="btnRefreshStorage">刷新占用</button>
+              <button class="btn btn-secondary btn-sm" id="btn-run-cleanup" type="button" data-i18n="btnRunCleanup">立即清理过期数据</button>
+            </div>
+          </div>
+
+          <div class="storage-card">
+            <div class="storage-top">
+              <span class="storage-total-lbl" data-i18n="storageTotalLbl">state/ 目录当前占用</span>
+              <strong class="storage-total-val" id="st-disk-total">0 MB</strong>
+            </div>
+            <div class="storage-bar">
+              <div class="sb-seg sb-audit" id="bar-audit" style="width:0%"></div>
+              <div class="sb-seg sb-cmd" id="bar-cmd" style="width:0%"></div>
+              <div class="sb-seg sb-meta" id="bar-meta" style="width:0%"></div>
+              <div class="sb-seg sb-aux" id="bar-aux" style="width:0%"></div>
+            </div>
+            <div class="storage-legend">
+              <div class="sl-item"><i class="sl-dot sb-audit"></i><span data-i18n="slAudit">审计日志</span><strong id="st-disk-audit">0 MB</strong></div>
+              <div class="sl-item"><i class="sl-dot sb-cmd"></i><span data-i18n="slCmd">命令输出</span><strong id="st-disk-cmd">0 MB</strong></div>
+              <div class="sl-item"><i class="sl-dot sb-meta"></i><span data-i18n="slMeta">会话与任务</span><strong id="st-disk-meta">0 MB</strong></div>
+              <div class="sl-item"><i class="sl-dot sb-aux"></i><span data-i18n="slAux">辅助日志</span><strong id="st-disk-aux">0 MB</strong></div>
+            </div>
+          </div>
+
+          <div class="switch-row" style="margin-top:10px;">
+            <div>
+              <div class="sw-title" data-i18n="swRetEnable">启用后台自动清理</div>
+              <div class="sw-desc" data-i18n="swRetEnableDesc">服务启动后自动执行一次，之后按设定周期在后台静默清理（正在运行的命令受锁保护不会被删）。</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="chk-ret-enabled" checked><span></span></label>
+          </div>
+
+          <div class="form-grid form-grid-3" style="margin-top:14px;">
+            <div class="field">
+              <label for="cfg-ret-interval" data-i18n="lblRetInterval">定时清理周期</label>
+              <select id="cfg-ret-interval">
+                <option value="1">每 1 小时</option>
+                <option value="6" selected>每 6 小时（推荐）</option>
+                <option value="12">每 12 小时</option>
+                <option value="24">每 24 小时</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-ret-audit-days" data-i18n="lblRetAuditDays">审计日志保留天数</label>
+              <select id="cfg-ret-audit-days">
+                <option value="7">7 天</option>
+                <option value="14">14 天</option>
+                <option value="30" selected>30 天（推荐）</option>
+                <option value="90">90 天</option>
+                <option value="180">180 天</option>
+                <option value="0">永久保留（仅按体积轮转）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-ret-wb-days" data-i18n="lblRetWbDays">命令输出与会话保留天数</label>
+              <select id="cfg-ret-wb-days">
+                <option value="1">1 天</option>
+                <option value="3">3 天</option>
+                <option value="7" selected>7 天（推荐）</option>
+                <option value="14">14 天</option>
+                <option value="30">30 天</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-ret-audit-mb" data-i18n="lblRetAuditMb">单审计文件轮转上限 (MB)</label>
+              <input id="cfg-ret-audit-mb" type="number" min="1" max="100" value="10">
+            </div>
+            <div class="field">
+              <label for="cfg-ret-audit-files" data-i18n="lblRetAuditFiles">审计归档最大数量</label>
+              <input id="cfg-ret-audit-files" type="number" min="1" max="20" value="5">
+            </div>
+            <div class="field">
+              <label for="cfg-ret-wb-mb" data-i18n="lblRetWbMb">命令输出总磁盘上限 (MB)</label>
+              <input id="cfg-ret-wb-mb" type="number" min="10" max="10240" value="200">
+            </div>
+            <div class="field">
+              <label for="cfg-ret-aux-mb" data-i18n="lblRetAuxMb">辅助日志轮转上限 (MB)</label>
+              <input id="cfg-ret-aux-mb" type="number" min="1" max="50" value="5">
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: UI & Activity Stream Preferences -->
+        <div class="section">
+          <h2 data-i18n="setUiTitle">动态流与界面偏好</h2>
+          <div class="form-grid form-grid-3">
+            <div class="field">
+              <label for="cfg-ui-pagesize" data-i18n="lblUiPageSize">动态流默认每页条数</label>
+              <select id="cfg-ui-pagesize">
+                <option value="50" selected>50 条 / 页</option>
+                <option value="100">100 条 / 页</option>
+                <option value="200">200 条 / 页</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-ui-poll" data-i18n="lblUiPoll">实时状态轮询间隔</label>
+              <select id="cfg-ui-poll">
+                <option value="1000">1 秒（高频）</option>
+                <option value="2000" selected>2 秒（推荐）</option>
+                <option value="5000">5 秒（节能）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="cfg-ui-lang" data-i18n="lblUiLang">界面语言</label>
+              <select id="cfg-ui-lang">
+                <option value="zh">简体中文</option>
+                <option value="en">English</option>
+              </select>
+            </div>
+          </div>
+          <div style="margin-top:12px;">
+            <button class="btn btn-ghost btn-sm" id="btn-reset-sidebar" type="button" data-i18n="btnResetSidebar">重置侧边栏停靠布局</button>
+          </div>
+        </div>
+
+        <!-- Card 3: Local Service Ports -->
+        <div class="section">
+          <h2 data-i18n="setPortsTitle">本地服务端口配置</h2>
+          <p class="sec-desc" data-i18n="setPortsDesc">如遇本机端口冲突可在此调整；修改端口后需重启服务生效。</p>
+          <div class="form-grid form-grid-4">
+            <div class="field">
+              <label for="cfg-port-fs">FS MCP</label>
+              <input id="cfg-port-fs" type="number" min="1024" max="65535" value="18849">
+            </div>
+            <div class="field">
+              <label for="cfg-port-wb">AI Workbench</label>
+              <input id="cfg-port-wb" type="number" min="1024" max="65535" value="18623">
+            </div>
+            <div class="field">
+              <label for="cfg-port-chrome-mcp">Chrome MCP</label>
+              <input id="cfg-port-chrome-mcp" type="number" min="1024" max="65535" value="18619">
+            </div>
+            <div class="field">
+              <label for="cfg-port-chrome-cdp">Chrome CDP</label>
+              <input id="cfg-port-chrome-cdp" type="number" min="1024" max="65535" value="9222">
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 4: Advanced Capabilities & Maintenance -->
+        <details class="guide-box" style="margin-bottom:14px;">
+          <summary data-i18n="setAdvSummary">高级能力与维护（视觉识别后端 / 目录快捷入口 / 密钥重置）</summary>
+          <div style="margin-top:14px;">
+            <h3 data-i18n="setVisionSub">视觉识别后端（Vision）</h3>
+            <div class="form-grid form-grid-3">
+              <div class="field">
+                <label for="cfg-vision-backend" data-i18n="lblVisionBackend">识别模式</label>
+                <select id="cfg-vision-backend">
+                  <option value="auto">Auto（自动检测）</option>
+                  <option value="gemini">Google Gemini</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="disabled">禁用 (Disabled)</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="cfg-gemini-key">Gemini API Key</label>
+                <div class="cred-box">
+                  <input id="cfg-gemini-key" type="password" placeholder="AIza...">
+                  <button class="btn btn-ghost btn-sm" type="button" data-toggle="cfg-gemini-key" data-i18n="show">显示</button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="cfg-openai-key">OpenAI API Key</label>
+                <div class="cred-box">
+                  <input id="cfg-openai-key" type="password" placeholder="sk-...">
+                  <button class="btn btn-ghost btn-sm" type="button" data-toggle="cfg-openai-key" data-i18n="show">显示</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="sub-group">
+              <h3 data-i18n="setMaintSub">目录与凭据维护</h3>
+              <div class="maint-actions">
+                <button class="btn btn-ghost btn-sm" id="btn-open-config-dir" type="button" data-i18n="btnOpenConfigDir">打开配置目录</button>
+                <button class="btn btn-ghost btn-sm" id="btn-open-logs-dir" type="button" data-i18n="btnOpenLogsDir">打开日志目录</button>
+                <button class="btn btn-ghost btn-sm btn-warn-outline" id="btn-regen-approval" type="button" data-i18n="btnRegenApproval">重新生成 Owner Approval Key</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <div class="save-bar" style="margin-top:4px;">
+          <button class="btn btn-primary" id="btn-save-settings" type="button" data-i18n="btnSaveSettings">保存系统设置</button>
         </div>
       </section>
     </main>

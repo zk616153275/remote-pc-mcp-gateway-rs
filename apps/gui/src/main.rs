@@ -1,8 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
+
+use activity::{ActivityEntry, ActivityPageResponse, ActivityQuery, ActivityStats, ActivityStore};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64_URL;
 use base64::Engine;
-use chrono::{DateTime, Local, Utc};
+use chrono::{Local, Utc};
 use rand::RngCore;
 use rpc_mcp_bridge::{
     start_cloudflare_tunnel, start_ssh_reverse_tunnel, CloudflareOptions, RunningSshTunnel,
@@ -11,9 +14,12 @@ use rpc_mcp_bridge::{
 use rpc_mcp_chrome_broker::{
     build_router as build_chrome_router, ChromeBrokerConfig, SidecarBackend,
 };
-use rpc_mcp_core::config::AppConfig;
+use rpc_mcp_core::config::{AppConfig, RetentionConfig};
 use rpc_mcp_core::instance_lock::InstanceLock;
 use rpc_mcp_core::path_guard::AllowedRoots;
+use rpc_mcp_core::retention::{
+    inspect_storage_usage, run_retention_cleanup, CleanupReport, StorageUsage,
+};
 use rpc_mcp_core::write_atomic_string;
 use rpc_mcp_fs::{build_router as build_fs_router, FsServerConfig};
 use rpc_mcp_gateway::{
@@ -40,7 +46,7 @@ use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 const MAX_LOG_LINES: usize = 300;
-const MAX_ACTIVITY_ITEMS: usize = 80;
+const DASHBOARD_RECENT_ACTIVITIES: usize = 6;
 
 #[cfg(windows)]
 mod single_instance {
@@ -262,22 +268,6 @@ struct LogEntry {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ActivityEntry {
-    id: String,
-    time: String,
-    category: String, // "fs" | "cmd" | "chrome" | "security"
-    platform: String, // "Gemini" | "ChatGPT" | "AI Client" | "Delete Guard"
-    tool: String,
-    target: String,
-    full_target: String,
-    cwd: String,
-    command_id: String,
-    is_error: bool,
-    source: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct PortInfo {
     fs_port: u16,
     workbench_port: u16,
@@ -299,16 +289,6 @@ struct CommandDetail {
     output: String,
 }
 
-#[derive(Clone, Serialize, Default)]
-#[serde(rename_all = "camelCase")]
-struct ActivityStats {
-    total: usize,
-    fs_count: usize,
-    cmd_count: usize,
-    chrome_count: usize,
-    security_count: usize,
-}
-
 struct RunningStack {
     _instance_lock: InstanceLock,
     handles: Vec<JoinHandle<()>>,
@@ -328,14 +308,6 @@ struct RunningStack {
     fake_ip_bypassed: bool,
 }
 
-struct ActivityCache {
-    audit_path: PathBuf,
-    audit_sig: Option<(SystemTime, u64)>,
-    dg_sig: Option<(SystemTime, u64)>,
-    items: Vec<ActivityEntry>,
-    stats: ActivityStats,
-}
-
 struct GuiState {
     stack: Mutex<Option<RunningStack>>,
     starting: AtomicBool,
@@ -344,7 +316,7 @@ struct GuiState {
     last_error: Mutex<Option<String>>,
     logs: Mutex<VecDeque<LogEntry>>,
     env_cache: EnvCheck,
-    activity_cache: std::sync::Mutex<Option<ActivityCache>>,
+    activity_store: ActivityStore,
     http: reqwest::Client,
 }
 
@@ -363,7 +335,7 @@ impl Default for GuiState {
             last_error: Mutex::new(None),
             logs: Mutex::new(VecDeque::new()),
             env_cache: check_env(),
-            activity_cache: std::sync::Mutex::new(None),
+            activity_store: ActivityStore::default(),
             http,
         }
     }
@@ -440,6 +412,7 @@ struct StatusSnapshot {
     logs: Vec<LogEntry>,
     activities: Vec<ActivityEntry>,
     stats: ActivityStats,
+    activity_revision: String,
 }
 
 struct ExternalProbe {
@@ -710,214 +683,35 @@ fn select_audit_path(running: bool, connection_mode: &str, gateway_ok: bool) -> 
     }
 }
 
-fn file_sig(path: &Path) -> Option<(SystemTime, u64)> {
-    let m = std::fs::metadata(path).ok()?;
-    Some((m.modified().ok()?, m.len()))
-}
-
-fn read_recent_activities_cached(
-    cache: &std::sync::Mutex<Option<ActivityCache>>,
-    running: bool,
-    connection_mode: &str,
-    gateway_ok: bool,
-) -> (Vec<ActivityEntry>, ActivityStats) {
-    let audit_path = select_audit_path(running, connection_mode, gateway_ok);
-    let dg_log = state_root()
+fn delete_guard_log_path() -> PathBuf {
+    state_root()
         .join("workbench")
         .join("delete-guard")
-        .join("delete-guard.log");
-    let audit_sig = file_sig(&audit_path);
-    let dg_sig = file_sig(&dg_log);
-
-    if let Ok(guard) = cache.lock() {
-        if let Some(ref c) = *guard {
-            if c.audit_path == audit_path && c.audit_sig == audit_sig && c.dg_sig == dg_sig {
-                return (c.items.clone(), c.stats.clone());
-            }
-        }
-    }
-
-    let (items, stats) = read_recent_activities(running, connection_mode, gateway_ok);
-    if let Ok(mut guard) = cache.lock() {
-        *guard = Some(ActivityCache {
-            audit_path,
-            audit_sig,
-            dg_sig,
-            items: items.clone(),
-            stats: stats.clone(),
-        });
-    }
-    (items, stats)
+        .join("delete-guard.log")
 }
 
-fn stable_activity_id(
-    prefix: &str,
-    parts: &[&str],
-    seen: &mut std::collections::HashMap<u64, u32>,
-) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for part in parts {
-        for b in part.as_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100000001b3);
+#[tauri::command]
+async fn query_activities(
+    query: ActivityQuery,
+    state: tauri::State<'_, Arc<GuiState>>,
+) -> Result<ActivityPageResponse, String> {
+    let audit_path = {
+        let guard = state.stack.lock().await;
+        if let Some(ref s) = *guard {
+            select_audit_path(true, &s.connection_mode, s.gw_ok)
+        } else if let Some(cached) = state.activity_store.last_audit_path() {
+            cached
+        } else {
+            let cfg = load_config().unwrap_or_default();
+            let mode = normalize_mode(&cfg.connection_mode);
+            select_audit_path(false, &mode, false)
         }
-        h ^= 0xff;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    let count = seen.entry(h).or_insert(0);
-    let seq = *count;
-    *count += 1;
-    if seq == 0 {
-        format!("{prefix}:{h:016x}")
-    } else {
-        format!("{prefix}:{h:016x}:{seq}")
-    }
-}
-
-fn read_recent_activities(
-    running: bool,
-    connection_mode: &str,
-    gateway_ok: bool,
-) -> (Vec<ActivityEntry>, ActivityStats) {
-    let mut items = Vec::new();
-    let mut stats = ActivityStats::default();
-    let mut seen_ids = std::collections::HashMap::new();
-    let audit_path = select_audit_path(running, connection_mode, gateway_ok);
-
-    if let Some(raw) = read_tail_utf8(&audit_path, 256 * 1024) {
-        let lines: Vec<&str> = raw.lines().collect();
-        let start = lines.len().saturating_sub(MAX_ACTIVITY_ITEMS);
-        for line in &lines[start..] {
-            let Ok(v) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            let event = v.get("event").and_then(Value::as_str).unwrap_or("");
-            let ts_raw = v.get("ts").and_then(Value::as_str).unwrap_or("");
-            let ts = DateTime::parse_from_rfc3339(ts_raw)
-                .ok()
-                .map(|dt| dt.with_timezone(&Local).format("%H:%M:%S").to_string())
-                .unwrap_or_else(|| "--:--:--".to_string());
-
-            if event == "tool_call" {
-                let tool = v.get("tool").and_then(Value::as_str).unwrap_or("unknown");
-                let lane = v.get("lane").and_then(Value::as_str).unwrap_or("fs");
-                let target = v.get("target").and_then(Value::as_str).unwrap_or("");
-                let full_target = v
-                    .get("fullTarget")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(target);
-                let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("");
-                let command_id = v.get("commandId").and_then(Value::as_str).unwrap_or("");
-                let is_error = v.get("isError").and_then(Value::as_bool).unwrap_or(false);
-                let source = v.get("source").and_then(Value::as_str).unwrap_or("");
-                let plat_raw = v.get("platform").and_then(Value::as_str).unwrap_or("");
-                let owner = v.get("owner").and_then(Value::as_str).unwrap_or("");
-                let platform = if plat_raw == "google" || owner.starts_with("gemini-") {
-                    "Gemini"
-                } else if plat_raw == "openai" || owner.starts_with("chatgpt-") {
-                    "ChatGPT"
-                } else {
-                    "AI Client"
-                };
-
-                let category = match lane {
-                    "chrome" => {
-                        stats.chrome_count += 1;
-                        "chrome"
-                    }
-                    "cmd" | "git" => {
-                        stats.cmd_count += 1;
-                        "cmd"
-                    }
-                    _ => {
-                        stats.fs_count += 1;
-                        "fs"
-                    }
-                };
-                stats.total += 1;
-                let id =
-                    stable_activity_id("a", &[ts_raw, tool, target, command_id], &mut seen_ids);
-                items.push(ActivityEntry {
-                    id,
-                    time: ts,
-                    category: category.into(),
-                    platform: platform.into(),
-                    tool: tool.into(),
-                    target: target.into(),
-                    full_target: full_target.into(),
-                    cwd: cwd.into(),
-                    command_id: command_id.into(),
-                    is_error,
-                    source: source.into(),
-                });
-            } else if event == "oauth_authorized" {
-                let cid = v.get("clientId").and_then(Value::as_str).unwrap_or("");
-                let platform = if cid.starts_with("gemini-") {
-                    "Gemini"
-                } else {
-                    "ChatGPT"
-                };
-                stats.security_count += 1;
-                stats.total += 1;
-                let id = stable_activity_id("o", &[ts_raw, cid], &mut seen_ids);
-                items.push(ActivityEntry {
-                    id,
-                    time: ts,
-                    category: "security".into(),
-                    platform: platform.into(),
-                    tool: "OAuth 授权通过".into(),
-                    target: cid.into(),
-                    full_target: cid.into(),
-                    cwd: String::new(),
-                    command_id: String::new(),
-                    is_error: false,
-                    source: "oauth".into(),
-                });
-            }
-        }
-    }
-
-    // Also include recent Delete Guard interceptions
-    let dg_log = state_root()
-        .join("workbench")
-        .join("delete-guard")
-        .join("delete-guard.log");
-    if let Some(raw) = read_tail_utf8(&dg_log, 32 * 1024) {
-        for line in raw.lines().rev().take(10) {
-            if line.contains("BLOCK-FIRST") {
-                let time = line
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("--:--:--")
-                    .to_string();
-                let target = line
-                    .split_once("[rust-workbench] ")
-                    .map(|(_, rest)| rest)
-                    .unwrap_or(line)
-                    .to_string();
-                stats.security_count += 1;
-                stats.total += 1;
-                let id = stable_activity_id("dg", &[&time, &target], &mut seen_ids);
-                items.push(ActivityEntry {
-                    id,
-                    time,
-                    category: "security".into(),
-                    platform: "Delete Guard".into(),
-                    tool: "拦截高危删除".into(),
-                    full_target: target.clone(),
-                    target,
-                    cwd: String::new(),
-                    command_id: String::new(),
-                    is_error: true,
-                    source: "delete-guard".into(),
-                });
-            }
-        }
-    }
-
-    items.reverse(); // Newest first
-    (items, stats)
+    };
+    let dg_log = delete_guard_log_path();
+    let store = Arc::clone(state.inner());
+    tokio::task::spawn_blocking(move || store.activity_store.query(&audit_path, &dg_log, &query))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -935,6 +729,20 @@ fn load_config() -> Result<AppConfig, String> {
 #[tauri::command]
 fn save_config(mut cfg: AppConfig) -> Result<AppConfig, String> {
     ensure_secrets(&mut cfg);
+    cfg.retention = cfg.retention.sanitized();
+    cfg.ui.default_page_size = match cfg.ui.default_page_size {
+        100 => 100,
+        200 => 200,
+        _ => 50,
+    };
+    cfg.ui.poll_interval_ms = cfg.ui.poll_interval_ms.clamp(1000, 10_000);
+    rpc_mcp_core::audit::configure_global_audit_limits(
+        cfg.retention.audit_max_file_mb,
+        cfg.retention.audit_max_files,
+    );
+    rpc_mcp_core::delete_guard::configure_global_delete_guard_log_max_mb(
+        cfg.retention.aux_log_max_mb,
+    );
     let path = config_path();
     let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     write_atomic_string(&path, &json).map_err(|e| e.to_string())?;
@@ -1094,6 +902,76 @@ fn reveal_in_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn get_storage_usage() -> Result<StorageUsage, String> {
+    let sroot = state_root();
+    tokio::task::spawn_blocking(move || inspect_storage_usage(&sroot))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn run_manual_cleanup(
+    retention: RetentionConfig,
+    state: tauri::State<'_, Arc<GuiState>>,
+) -> Result<CleanupReport, String> {
+    let allow_active_trim = if state.stack.lock().await.is_some() {
+        true
+    } else {
+        let cfg = load_config().unwrap_or_default();
+        probe_external_backend(&state.http, &cfg).await.is_none()
+    };
+    let sroot = state_root();
+    let rroot = repo_root();
+    let report = tokio::task::spawn_blocking(move || {
+        run_retention_cleanup(&sroot, Some(&rroot), &retention, allow_active_trim)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    if report.freed_bytes > 0
+        || report.audit_files_removed > 0
+        || report.audit_lines_trimmed > 0
+        || report.workbench_commands_removed > 0
+        || report.workbench_meta_removed > 0
+        || report.old_binaries_removed > 0
+    {
+        state
+            .push_log(
+                "ok",
+                "CLEANUP",
+                format!(
+                    "已清理过期数据：释放 {:.2} MB（审计归档 {} 个 / 裁剪 {} 行，命令目录 {} 个，会话 {} 个，旧程序 {} 个）",
+                    report.freed_bytes as f64 / (1024.0 * 1024.0),
+                    report.audit_files_removed,
+                    report.audit_lines_trimmed,
+                    report.workbench_commands_removed,
+                    report.workbench_meta_removed,
+                    report.old_binaries_removed,
+                ),
+            )
+            .await;
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+fn open_app_dir(kind: String) -> Result<(), String> {
+    let target = match kind.as_str() {
+        "config" => repo_root().join("config"),
+        "logs" => state_root().join("logs"),
+        "state" => state_root(),
+        _ => return Err("不支持的目录类型".into()),
+    };
+    let _ = std::fs::create_dir_all(&target);
+    reveal_in_explorer(target.display().to_string())
+}
+
+#[tauri::command]
+fn regenerate_approval_key() -> String {
+    random_secret(16)
+}
+
+#[tauri::command]
 async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnapshot, String> {
     let mut guard = state.stack.lock().await;
     if let Some(ref mut s) = *guard {
@@ -1138,8 +1016,12 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
         let err = state.last_error.lock().await.clone();
         let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
         let env = state.env_cache.clone();
-        let (activities, stats) =
-            read_recent_activities_cached(&state.activity_cache, true, &s.connection_mode, s.gw_ok);
+        let audit_path = select_audit_path(true, &s.connection_mode, s.gw_ok);
+        let snap = state.activity_store.snapshot(
+            &audit_path,
+            &delete_guard_log_path(),
+            DASHBOARD_RECENT_ACTIVITIES,
+        );
         return Ok(StatusSnapshot {
             running: true,
             managed_by: "gui".into(),
@@ -1157,8 +1039,9 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
             last_error: err,
             env,
             logs,
-            activities,
-            stats,
+            activities: snap.recent,
+            stats: snap.stats,
+            activity_revision: snap.revision,
         });
     }
     drop(guard);
@@ -1182,11 +1065,11 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
         let err = state.last_error.lock().await.clone();
         let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
         let env = state.env_cache.clone();
-        let (activities, stats) = read_recent_activities_cached(
-            &state.activity_cache,
-            true,
-            &ext.connection_mode,
-            ext.gateway_ok,
+        let audit_path = select_audit_path(true, &ext.connection_mode, ext.gateway_ok);
+        let snap = state.activity_store.snapshot(
+            &audit_path,
+            &delete_guard_log_path(),
+            DASHBOARD_RECENT_ACTIVITIES,
         );
         return Ok(StatusSnapshot {
             running: true,
@@ -1210,8 +1093,9 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
             last_error: err,
             env,
             logs,
-            activities,
-            stats,
+            activities: snap.recent,
+            stats: snap.stats,
+            activity_revision: snap.revision,
         });
     }
 
@@ -1220,8 +1104,12 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
     let logs: Vec<LogEntry> = state.logs.lock().await.iter().cloned().collect();
     let env = state.env_cache.clone();
     let cfg_mode = normalize_mode(&cfg.connection_mode);
-    let (activities, stats) =
-        read_recent_activities_cached(&state.activity_cache, false, &cfg_mode, false);
+    let audit_path = select_audit_path(false, &cfg_mode, false);
+    let snap = state.activity_store.snapshot(
+        &audit_path,
+        &delete_guard_log_path(),
+        DASHBOARD_RECENT_ACTIVITIES,
+    );
     Ok(StatusSnapshot {
         running: false,
         managed_by: "none".into(),
@@ -1244,8 +1132,9 @@ async fn get_status(state: tauri::State<'_, Arc<GuiState>>) -> Result<StatusSnap
         last_error: err,
         env,
         logs,
-        activities,
-        stats,
+        activities: snap.recent,
+        stats: snap.stats,
+        activity_revision: snap.revision,
     })
 }
 
@@ -1360,15 +1249,31 @@ async fn start_services_inner(cfg: AppConfig, state: &Arc<GuiState>) -> Result<(
             return Err(e.to_string());
         }
     };
-    let prune_engine = Arc::clone(&wb_engine);
-    handles.push(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3600));
-        loop {
-            interval.tick().await;
-            let eng = Arc::clone(&prune_engine);
-            let _ = tokio::task::spawn_blocking(move || eng.prune()).await;
-        }
-    }));
+    let ret_cfg = cfg.retention.sanitized();
+    rpc_mcp_core::audit::configure_global_audit_limits(
+        ret_cfg.audit_max_file_mb,
+        ret_cfg.audit_max_files,
+    );
+    rpc_mcp_core::delete_guard::configure_global_delete_guard_log_max_mb(ret_cfg.aux_log_max_mb);
+    if ret_cfg.enabled {
+        let ret_state = sroot.clone();
+        let ret_repo = repo_root();
+        handles.push(tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(ret_cfg.interval_hours * 3600));
+            loop {
+                interval.tick().await;
+                let st = ret_state.clone();
+                let rp = ret_repo.clone();
+                let rc = ret_cfg.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    run_retention_cleanup(&st, Some(&rp), &rc, true)
+                })
+                .await;
+            }
+        }));
+    }
     let wb_app = build_wb_router(
         WorkbenchConfig {
             host: "127.0.0.1".into(),
@@ -1934,8 +1839,13 @@ fn main() {
             validate_root_dir,
             pick_folder,
             clear_logs,
+            query_activities,
             get_command_detail,
             reveal_in_explorer,
+            get_storage_usage,
+            run_manual_cleanup,
+            open_app_dir,
+            regenerate_approval_key,
             get_status,
             start_services,
             stop_services

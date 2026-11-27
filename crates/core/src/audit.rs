@@ -3,34 +3,62 @@ use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-const MAX_BYTES: u64 = 10 * 1024 * 1024;
-const MAX_FILES: usize = 5;
+const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024;
+const DEFAULT_MAX_FILES: usize = 5;
 
-fn audit_write_lock() -> &'static Mutex<()> {
+static GLOBAL_MAX_BYTES: AtomicU64 = AtomicU64::new(DEFAULT_MAX_BYTES);
+static GLOBAL_MAX_FILES: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_FILES);
+
+pub fn configure_global_audit_limits(max_file_mb: u64, max_files: usize) {
+    let bytes = max_file_mb.clamp(1, 100) * 1024 * 1024;
+    let files = max_files.clamp(1, 20);
+    GLOBAL_MAX_BYTES.store(bytes, Ordering::Relaxed);
+    GLOBAL_MAX_FILES.store(files, Ordering::Relaxed);
+}
+
+pub fn audit_write_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
 pub struct AuditLog {
     path: Option<PathBuf>,
+    custom_limits: Option<(u64, usize)>,
 }
 
 impl AuditLog {
     pub fn new(path: Option<PathBuf>) -> Self {
-        Self { path }
+        Self {
+            path,
+            custom_limits: None,
+        }
+    }
+
+    pub fn with_limits(path: Option<PathBuf>, max_bytes: u64, max_files: usize) -> Self {
+        Self {
+            path,
+            custom_limits: Some((max_bytes.max(1024 * 1024), max_files.clamp(1, 20))),
+        }
     }
 
     pub fn record(&self, event: &str, fields: Value) {
         let Some(ref path) = self.path else { return };
+        let (max_bytes, max_files) = self.custom_limits.unwrap_or_else(|| {
+            (
+                GLOBAL_MAX_BYTES.load(Ordering::Relaxed),
+                GLOBAL_MAX_FILES.load(Ordering::Relaxed),
+            )
+        });
         let _g = audit_write_lock().lock().unwrap_or_else(|e| e.into_inner());
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(meta) = fs::metadata(path) {
-            if meta.len() >= MAX_BYTES {
-                for idx in (1..MAX_FILES).rev() {
+            if meta.len() >= max_bytes {
+                for idx in (1..max_files).rev() {
                     let from = PathBuf::from(format!("{}.{idx}", path.display()));
                     let to = PathBuf::from(format!("{}.{}", path.display(), idx + 1));
                     let _ = fs::rename(from, to);

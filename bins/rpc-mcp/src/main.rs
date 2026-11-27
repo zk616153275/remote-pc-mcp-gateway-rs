@@ -225,6 +225,33 @@ async fn main() -> Result<()> {
                 );
             }
 
+            let ret_cfg = file_cfg.retention.sanitized();
+            rpc_mcp_core::audit::configure_global_audit_limits(
+                ret_cfg.audit_max_file_mb,
+                ret_cfg.audit_max_files,
+            );
+            rpc_mcp_core::delete_guard::configure_global_delete_guard_log_max_mb(
+                ret_cfg.aux_log_max_mb,
+            );
+            if ret_cfg.enabled {
+                let ret_state = state_base.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                        ret_cfg.interval_hours * 3600,
+                    ));
+                    loop {
+                        interval.tick().await;
+                        let st = ret_state.clone();
+                        let rc = ret_cfg.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            rpc_mcp_core::retention::run_retention_cleanup(&st, None, &rc, true)
+                        })
+                        .await;
+                    }
+                });
+            }
+
             info!(
                 "Starting rpc-mcp agent: fs=:{}, workbench=:{}",
                 fs_cfg.port, wb_cfg.port
@@ -362,6 +389,33 @@ async fn main() -> Result<()> {
                 enable_delete_guard: cfg.guards_and_hooks.enable_delete_guard,
                 audit_log: Some(local_audit.clone()),
             };
+            let ret_cfg = cfg.retention.sanitized();
+            rpc_mcp_core::audit::configure_global_audit_limits(
+                ret_cfg.audit_max_file_mb,
+                ret_cfg.audit_max_files,
+            );
+            rpc_mcp_core::delete_guard::configure_global_delete_guard_log_max_mb(
+                ret_cfg.aux_log_max_mb,
+            );
+            if ret_cfg.enabled {
+                let ret_state = state_dir.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                        ret_cfg.interval_hours * 3600,
+                    ));
+                    loop {
+                        interval.tick().await;
+                        let st = ret_state.clone();
+                        let rc = ret_cfg.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            rpc_mcp_core::retention::run_retention_cleanup(&st, None, &rc, true)
+                        })
+                        .await;
+                    }
+                });
+            }
+
             let mut chrome_ok = false;
             let mut chrome_backend = None;
             let chrome_token = if !cfg.tokens.chrome_token.trim().is_empty() {

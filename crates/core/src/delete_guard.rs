@@ -6,9 +6,16 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 const TTL_SECONDS: i64 = 600;
+static GLOBAL_DG_LOG_MAX_BYTES: AtomicU64 = AtomicU64::new(5 * 1024 * 1024);
+
+pub fn configure_global_delete_guard_log_max_mb(max_mb: u64) {
+    let bytes = max_mb.clamp(1, 50) * 1024 * 1024;
+    GLOBAL_DG_LOG_MAX_BYTES.store(bytes, Ordering::Relaxed);
+}
 
 fn state_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -137,12 +144,21 @@ impl DeleteGuard {
     }
 
     fn append_log(&self, line: &str) {
+        const MAX_DG_LOG_FILES: usize = 2;
+        let max_bytes = GLOBAL_DG_LOG_MAX_BYTES.load(Ordering::Relaxed);
         let _ = fs::create_dir_all(&self.state_dir);
-        if let Ok(mut file) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.log_path())
-        {
+        let path = self.log_path();
+        if let Ok(meta) = fs::metadata(&path) {
+            if meta.len() >= max_bytes {
+                for idx in (1..MAX_DG_LOG_FILES).rev() {
+                    let from = PathBuf::from(format!("{}.{idx}", path.display()));
+                    let to = PathBuf::from(format!("{}.{}", path.display(), idx + 1));
+                    let _ = fs::rename(from, to);
+                }
+                let _ = fs::rename(&path, format!("{}.1", path.display()));
+            }
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
             let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
             let _ = writeln!(file, "{ts}  [rust-workbench] {line}");
         }

@@ -52,6 +52,20 @@
     "fsToken": "GENERATE_ON_FIRST_RUN",
     "workbenchToken": "GENERATE_ON_FIRST_RUN"
   },
+  "retention": {
+    "enabled": true,
+    "intervalHours": 6,
+    "auditRetentionDays": 30,
+    "auditMaxFileMb": 10,
+    "auditMaxFiles": 5,
+    "workbenchRetentionDays": 7,
+    "workbenchMaxTotalMb": 200,
+    "auxLogMaxMb": 5
+  },
+  "ui": {
+    "defaultPageSize": 50,
+    "pollIntervalMs": 2000
+  },
   "allowedRoots": [
     "C:\\Projects\\DemoWorkspace"
   ]

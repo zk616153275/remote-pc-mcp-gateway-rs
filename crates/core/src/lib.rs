@@ -5,6 +5,7 @@ pub mod git_policy;
 pub mod instance_lock;
 pub mod path_guard;
 pub mod process_guard;
+pub mod retention;
 
 pub use process_guard::ChildJobGuard;
 
