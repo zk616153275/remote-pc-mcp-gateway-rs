@@ -1026,7 +1026,7 @@ async fn download_cloudflared(state: tauri::State<'_, Arc<GuiState>>) -> Result<
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(180))
-        .user_agent("remote-pc-mcp-gateway/0.1")
+        .user_agent("remote-pc-mcp-gateway/0.2")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 

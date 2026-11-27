@@ -3259,7 +3259,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3283,7 +3283,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-bridge"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3298,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-chrome-broker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3312,7 +3312,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3328,7 +3328,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-fs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3350,7 +3350,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-gateway"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3372,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-mcp-workbench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5507,7 +5507,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
 ]
